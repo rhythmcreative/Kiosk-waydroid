@@ -1,0 +1,90 @@
+name: Build & publish add-on images
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'haoswaydroid/**'
+  workflow_dispatch:
+
+env:
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  IMAGE_NAME: haoswaydroid
+  BUILDER_VERSION: 2026.03.2
+  CONTEXT: ./haoswaydroid
+
+permissions:
+  contents: read
+
+jobs:
+  init:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.2
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+
+  build:
+    name: Build ${{ matrix.arch }} image
+    needs: init
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Get add-on version from config.yaml
+        id: version
+        run: |
+          echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoswaydroid/config.yaml)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.arch }} image
+        uses: home-assistant/builder/actions/build-image@2026.03.2
+        with:
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: ${{ env.CONTEXT }}
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ steps.version.outputs.version }}
+            latest
+          push: "true"
+          version: ${{ steps.version.outputs.version }}
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [ init, build ]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Get add-on version from config.yaml
+        id: version
+        run: |
+          echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoswaydroid/config.yaml)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+          image-tags: |
+            ${{ steps.version.outputs.version }}
+            latest

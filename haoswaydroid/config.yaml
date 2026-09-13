@@ -1,0 +1,106 @@
+---
+name: "Waydroid Kiosk Satellite"
+description: |
+  Start Waydroid (Android container) in kiosk mode on local HAOS display
+  with full microphone, sound, touch, and Kiosk-Satellite integration.
+version: "1.0.0"
+slug: "haoswaydroid"
+url: "https://github.com/rhythmcreative/Kiosk-waydroid/tree/main/haoswaydroid"
+
+image: ghcr.io/rhythmcreative/{arch}-haoswaydroid
+
+arch:
+  - aarch64
+  - amd64
+
+startup: application
+host_network: true
+init: false
+ingress: true
+ingress_port: 2324
+homeassistant_api: true
+auth_api: true
+audio: true
+usb: true
+full_access: true
+apparmor: false
+
+ulimits:
+  nofile:
+    soft: 65536
+    hard: 65536
+
+devices:
+  - /dev/dri/card0
+  - /dev/dri/card1
+  - /dev/dri/renderD128
+  - /dev/binderfs
+  - /dev/binder
+  - /dev/vndbinder
+  - /dev/hwbinder
+  - /dev/ashmem
+  - /dev/fuse
+  - /dev/snd
+  - /dev/input/event0
+  - /dev/input/event1
+  - /dev/input/event2
+  - /dev/input/event3
+  - /dev/input/event4
+  - /dev/input/event5
+  - /dev/input/event6
+  - /dev/input/event7
+  - /dev/input/event8
+  - /dev/input/event9
+  - /dev/input/event10
+  - /dev/input/event11
+  - /dev/input/event12
+  - /dev/input/event13
+  - /dev/input/event14
+  - /dev/input/event15
+  - /dev/input/event16
+  - /dev/input/event17
+  - /dev/input/event18
+  - /dev/input/event19
+  - /dev/input/event20
+  - /dev/input/event21
+  - /dev/input/event22
+  - /dev/input/event23
+  - /dev/input/event24
+  - /dev/input/event25
+
+map:
+  - addon_config:rw
+  - media:rw
+  - share:rw
+
+privileged:
+  - SYS_ADMIN
+  - NET_ADMIN
+  - SYS_RAWIO
+  - DAC_READ_SEARCH
+
+tmpfs: true
+
+options:
+  apk_url: ""
+  auto_update_apk: true
+  display_width: 0
+  display_height: 0
+  display_dpi: 0
+  display_orientation: "auto"
+  remote_admin_port: 2324
+  enable_camera: true
+  audio_volume: 100
+  keep_alive: true
+
+schema:
+  apk_url: "str?"
+  auto_update_apk: "bool"
+  display_width: "int?"
+  display_height: "int?"
+  display_dpi: "int?"
+  display_orientation: "list(auto|0|90|180|270)?"
+  remote_admin_port: "port"
+  enable_camera: "bool"
+  audio_volume: "int"
+  keep_alive: "bool"

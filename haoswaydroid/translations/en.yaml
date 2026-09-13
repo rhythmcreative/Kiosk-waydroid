@@ -1,0 +1,31 @@
+configuration:
+  apk_url:
+    name: "Custom APK URL"
+    description: "Optional direct URL to a custom Kiosk-Satellite APK. Leave blank to automatically download the latest official release."
+  auto_update_apk:
+    name: "Auto-update APK"
+    description: "Automatically download and install new versions of Kiosk Satellite when released."
+  display_width:
+    name: "Display Width"
+    description: "Custom display width in pixels (0 for native/auto)."
+  display_height:
+    name: "Display Height"
+    description: "Custom display height in pixels (0 for native/auto)."
+  display_dpi:
+    name: "Display DPI"
+    description: "Screen pixel density DPI (0 for auto)."
+  display_orientation:
+    name: "Display Orientation"
+    description: "Force screen rotation (auto, 0, 90, 180, 270 degrees)."
+  remote_admin_port:
+    name: "Remote Admin Web Port"
+    description: "Port to access the Kiosk Satellite Remote Administration web interface (default: 2324)."
+  enable_camera:
+    name: "Enable Camera"
+    description: "Allow Kiosk Satellite access to video input/webcams for gestures and streaming."
+  audio_volume:
+    name: "Audio Volume"
+    description: "Default output audio volume level (0 to 100)."
+  keep_alive:
+    name: "Keep App Alive"
+    description: "Automatically relaunch Kiosk Satellite if it is ever closed."
