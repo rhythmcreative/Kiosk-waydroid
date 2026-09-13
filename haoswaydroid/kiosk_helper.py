@@ -182,18 +182,21 @@ def grant_permissions():
 
 def setup_port_forwarding(options):
     remote_port = options.get("remote_admin_port", 2324)
-    # Find Waydroid IP address
-    rc, out, _ = run_cmd("waydroid shell ip -4 addr show eth0 | grep inet | awk '{print $2}' | cut -d/ -f1", shell=True)
-    waydroid_ip = out.strip()
-    if not waydroid_ip:
-        # Fallback to standard Waydroid IP
-        waydroid_ip = "192.168.240.112"
+    logger.info(f"Setting up port forward for Kiosk Satellite web admin on port {remote_port}")
     
-    logger.info(f"Setting up port forward for Kiosk Satellite web admin {remote_port} -> {waydroid_ip}:2324")
+    # Helper script to bridge into Waydroid Android container network namespace directly
+    proxy_script = "/usr/local/bin/kiosk_proxy.sh"
+    try:
+        with open(proxy_script, "w") as f:
+            f.write("#!/bin/sh\nPID=$(lxc-info -P /var/lib/waydroid/lxc -n waydroid -p -H 2>/dev/null)\nif [ -n \"$PID\" ]; then\n    exec nsenter -t \"$PID\" -n socat - TCP:127.0.0.1:2324\nfi\n")
+        os.chmod(proxy_script, 0o755)
+    except Exception as e:
+        logger.error(f"Failed to create kiosk_proxy script: {e}")
+
     # Kill any existing socat on remote_port
     run_cmd(f"pkill -f 'socat.*{remote_port}'", shell=True)
     # Start socat background proxy
-    subprocess.Popen(["socat", f"TCP-LISTEN:{remote_port},fork,reuseaddr", f"TCP:{waydroid_ip}:2324"])
+    subprocess.Popen(["socat", f"TCP-LISTEN:{remote_port},fork,reuseaddr", f"EXEC:{proxy_script}"])
 
 def launch_app():
     logger.info(f"Launching {PACKAGE_NAME}...")
