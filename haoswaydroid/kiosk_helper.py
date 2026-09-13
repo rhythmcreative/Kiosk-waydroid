@@ -234,22 +234,23 @@ def setup_port_forwarding(options):
 
 def provision_android():
     logger.info("Configuring Android system settings (disabling lockscreen & sleep)...")
-    run_cmd(["waydroid", "shell", "-u", "0", "/system/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup 2>/dev/null; echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || true"])
-    run_cmd(["waydroid", "shell", "-u", "0", "/system/bin/sh", "-c", "if ! pidof lmkd >/dev/null 2>&1; then /system/bin/lmkd & fi"])
-    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "global", "device_provisioned", "1"])
-    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "secure", "user_setup_complete", "1"])
-    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "secure", "lockscreen.disabled", "1"])
-    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "global", "stay_on_while_plugged_in", "3"])
-    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "system", "screen_off_timeout", "2147483647"])
-    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "global", "hide_error_dialogs", "1"])
-    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "global", "anr_show_background", "0"])
-    run_cmd(["waydroid", "shell", "wm", "dismiss-keyguard"])
-    run_cmd(["waydroid", "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+    run_cmd(["waydroid", "shell", "-u", "0", "--", "/system/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup 2>/dev/null; echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || true"])
+    run_cmd(["waydroid", "shell", "-u", "0", "--", "/system/bin/sh", "-c", "if ! pidof lmkd >/dev/null 2>&1; then /system/bin/lmkd & fi"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "global", "device_provisioned", "1"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "secure", "user_setup_complete", "1"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "secure", "lockscreen.disabled", "1"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "global", "stay_on_while_plugged_in", "3"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "system", "screen_off_timeout", "2147483647"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "global", "hide_error_dialogs", "1"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "global", "anr_show_background", "0"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "wm", "dismiss-keyguard"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "input", "keyevent", "KEYCODE_WAKEUP"])
 
 def launch_app():
     logger.info(f"Launching {PACKAGE_NAME}...")
-    run_cmd(["waydroid", "shell", "wm", "dismiss-keyguard"])
-    run_cmd(["waydroid", "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "wm", "dismiss-keyguard"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "input", "keyevent", "KEYCODE_WAKEUP"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "--", "am", "start", "-n", f"{PACKAGE_NAME}/.MainActivity"])
     run_cmd(["waydroid", "app", "launch", PACKAGE_NAME])
 
 def is_app_running():
