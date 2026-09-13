@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.10}"
+echo " Version: ${ADDON_VERSION:-1.0.11}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -10,6 +10,69 @@ mkdir -p /data/waydroid /data/apk_cache /var/lib/waydroid
 if [ ! -L /var/lib/waydroid ] && [ -d /data/waydroid ]; then
     mount --bind /data/waydroid /var/lib/waydroid 2>/dev/null || true
 fi
+
+# Remount cgroup and /dev as read-write
+mount -o remount,rw /sys/fs/cgroup 2>/dev/null || true
+mount -o remount,rw /dev 2>/dev/null || true
+
+# Fix LXC post-stop hook and ensure cgroup v2 compatibility
+sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /usr/lib/waydroid/data/configs/config_base 2>/dev/null || true
+if [ -f /var/lib/waydroid/lxc/waydroid/config ]; then
+    sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /var/lib/waydroid/lxc/waydroid/config 2>/dev/null || true
+fi
+
+# Overlay Android cgroups.json for cgroup v2 compatibility
+mkdir -p /var/lib/waydroid/overlay_rw/system/etc
+cat << 'EOF' > /var/lib/waydroid/overlay_rw/system/etc/cgroups.json
+{
+  "Cgroups": [
+    {
+      "Controller": "blkio",
+      "Path": "/dev/blkio",
+      "Mode": "0775",
+      "UID": "system",
+      "GID": "system",
+      "Optional": true
+    },
+    {
+      "Controller": "cpu",
+      "Path": "/dev/cpuctl",
+      "Mode": "0755",
+      "UID": "system",
+      "GID": "system",
+      "Optional": true
+    },
+    {
+      "Controller": "cpuset",
+      "Path": "/dev/cpuset",
+      "Mode": "0755",
+      "UID": "system",
+      "GID": "system",
+      "Optional": true
+    },
+    {
+      "Controller": "memory",
+      "Path": "/dev/memcg",
+      "Mode": "0700",
+      "UID": "root",
+      "GID": "system",
+      "Optional": true
+    }
+  ],
+  "Cgroups2": {
+    "Path": "/sys/fs/cgroup",
+    "Mode": "0775",
+    "UID": "system",
+    "GID": "system",
+    "Controllers": [
+      {
+        "Controller": "freezer",
+        "Path": "."
+      }
+    ]
+  }
+}
+EOF
 
 # 2. Setup D-Bus
 mkdir -p /run/dbus /etc/dbus-1/system.d

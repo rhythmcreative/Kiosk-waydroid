@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.11
+- Fix: Overlay Android `cgroups.json` with `Optional: true` for cgroup v2 compatibility, preventing Android `/init` crash on `SetupCgroups`.
+- Fix: Remount `/sys/fs/cgroup` and `/dev` as read-write.
+- Fix: Replace `/dev/null` with `/bin/true` in `lxc.hook.post-stop`.
+- Fix: Loop and wait for Android boot in `cage-run.sh` to prevent Cage compositor from prematurely terminating.
+
 ## 1.0.10
 - Fix: Prevent `waydroid-net.sh` failure on read-only `/proc/sys/net/ipv4/ip_forward` inside Docker container.
 

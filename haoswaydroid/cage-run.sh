@@ -8,8 +8,19 @@ sleep 2
 echo "Starting Waydroid user session..."
 waydroid session start &
 
-sleep 3
+echo "Waiting for Android boot..."
+for i in $(seq 1 120); do
+    STATUS=$(waydroid shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
+    if [ "$STATUS" = "1" ]; then
+        echo "Android boot completed!"
+        break
+    fi
+    sleep 2
+done
 
-# Display full Waydroid UI in fullscreen under Cage
-echo "Launching Waydroid Full UI under Cage..."
-exec waydroid show-full-ui
+# Keep Cage compositor active and display Full UI
+while true; do
+    echo "Launching Waydroid Full UI under Cage..."
+    waydroid show-full-ui || true
+    sleep 2
+done
