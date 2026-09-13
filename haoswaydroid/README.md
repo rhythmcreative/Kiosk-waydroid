@@ -2,7 +2,7 @@
 
 Display [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) on your attached display with full microphone, audio, touch, and hardware acceleration on Home Assistant OS using Waydroid.
 
-**Maintainer:** rhythmcreative · **Version:** 1.0.4 (September 2026) · See the [CHANGELOG](CHANGELOG.md).
+**Maintainer:** rhythmcreative · **Version:** 1.0.5 (September 2026) · See the [CHANGELOG](CHANGELOG.md).
 
 Launches Waydroid + Cage Wayland Compositor running [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite). Microphone, sound, touchscreen, and keyboard work out of the box with auto-granted Android permissions and remote management interface on port 2324.
 

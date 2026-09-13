@@ -1,7 +1,10 @@
 # Changelog
 
+## 1.0.5
+- Fix: Set `SEATD_VTBOUND=0` in `seatd`. Disables VT/TTY switching at the seatd level so clients (Cage/wlroots) receive the active session signal immediately without requesting physical VT switching.
+- Fix: Ensured `/run/seatd.sock` permissions and symlink.
+
 ## 1.0.4
-- Fix: Switch to libseat noop backend (`LIBSEAT_BACKEND=noop`) designed for containers without VT/TTY switching. Eliminates "Could not open target tty / tty0" permissions error.
 - Fix: Added `WLR_NO_HARDWARE_CURSORS=1` for clean rendering on Raspberry Pi DRM KMS.
 
 ## 1.0.3
