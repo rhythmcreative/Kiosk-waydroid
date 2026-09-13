@@ -18,9 +18,12 @@ for i in $(seq 1 120); do
     sleep 2
 done
 
-# Keep Cage compositor active and display Full UI
+# Display Waydroid Full UI under Cage
+echo "Launching Waydroid Full UI under Cage..."
+waydroid show-full-ui || true
+
+# Keep Cage session alive without burning CPU in a busy loop
 while true; do
-    echo "Launching Waydroid Full UI under Cage..."
-    waydroid show-full-ui || true
-    sleep 2
+    sleep 3600 &
+    wait $!
 done

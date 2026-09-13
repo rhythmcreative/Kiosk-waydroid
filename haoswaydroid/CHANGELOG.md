@@ -5,6 +5,8 @@
 - Fix: Add `/dev/uinput`, `/dev/input/mice`, and `/dev/input/mouse0` to add-on device permissions.
 - Fix: Automatically initialize fallback `systemd-udevd` daemon and run `udevadm trigger` if host udev database is not mounted.
 - Fix: Ensure read/write access permissions on all `/dev/input/*` event nodes at container startup.
+- Fix: Proxy web admin port 2324 directly into Waydroid container network namespace via `nsenter`.
+- Performance: Eliminated 2-second busy loop calling `waydroid show-full-ui` in `cage-run.sh`, significantly reducing idle CPU usage.
 
 ## 1.0.12
 - Fix: Resolved Android container reboot loop caused by bpfloader failure on Linux 6.12+ kernels by disabling `reboot_on_failure` and setting `bpf.progs_loaded 1`.
