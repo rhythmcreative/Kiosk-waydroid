@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -e
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
@@ -18,18 +17,20 @@ rm -f /run/dbus/pid
 dbus-daemon --system --fork || true
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
 
-# 3. Setup Binder Nodes (BinderFS)
-if [ ! -d /dev/binderfs ]; then
-    mkdir -p /dev/binderfs
-fi
-
-if ! mountpoint -q /dev/binderfs; then
+# 3. Setup / Check Binder Nodes
+if [ -e "/dev/binderfs/binder" ]; then
+    echo "Found /dev/binderfs/binder."
+elif [ -e "/dev/binder" ]; then
+    echo "Found /dev/binder."
+else
+    echo "Notice: Binder nodes not mounted in container. Attempting mount..."
+    mkdir -p /dev/binderfs 2>/dev/null || true
     mount -t binder binder /dev/binderfs 2>/dev/null || true
 fi
 
 for node in binder vndbinder hwbinder; do
     if [ -e "/dev/binderfs/$node" ] && [ ! -e "/dev/$node" ]; then
-        ln -s "/dev/binderfs/$node" "/dev/$node" 2>/dev/null || true
+        ln -sf "/dev/binderfs/$node" "/dev/$node" 2>/dev/null || true
     fi
 done
 
@@ -44,14 +45,12 @@ if [ -S /run/audio/pulse.sock ]; then
 elif [ -n "$PULSE_SERVER" ]; then
     echo "Using PULSE_SERVER=$PULSE_SERVER"
 else
-    # Start internal PulseAudio daemon if host socket is not mounted
-    pulseaudio --start --exit-idle-time=-1 || true
+    pulseaudio --start --exit-idle-time=-1 2>/dev/null || true
     if [ -S /run/user/0/pulse/native ]; then
         export PULSE_SERVER="unix:/run/user/0/pulse/native"
     fi
 fi
 
-# Test audio/mic access
 if command -v pactl >/dev/null 2>&1; then
     echo "Audio server status:"
     pactl info 2>/dev/null || echo "PulseAudio daemon active."
@@ -60,11 +59,10 @@ fi
 # 5. Initialize Waydroid if not already initialized
 if [ ! -f /var/lib/waydroid/images/system.img ]; then
     echo "Waydroid system image not found. Initializing Waydroid (VANILLA)..."
-    waydroid init -s VANILLA -f || {
-        echo "Initial init failed, retrying..."
-        waydroid init -s VANILLA
+    waydroid init -s VANILLA -f || waydroid init -s VANILLA || {
+        echo "Warning: waydroid init encountered errors."
     }
-    echo "Waydroid initialized successfully."
+    echo "Waydroid initialized."
 fi
 
 # 6. Start Seatd for Wayland DRM/KMS session
