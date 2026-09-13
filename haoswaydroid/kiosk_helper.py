@@ -101,6 +101,32 @@ def configure_display(options):
     dpi = options.get("display_dpi", 0)
     orientation = options.get("display_orientation", "auto")
 
+    # Auto-detect native resolution from DRM KMS if not configured
+    if not width or not height or width <= 0 or height <= 0:
+        try:
+            import glob
+            for mode_file in sorted(glob.glob("/sys/class/drm/card*-*/modes")):
+                if os.path.exists(mode_file):
+                    with open(mode_file, "r") as f:
+                        line = f.readline().strip()
+                        if "x" in line:
+                            w, h = line.split("x")[:2]
+                            width = int(w)
+                            height = int(h)
+                            logger.info(f"Auto-detected native display resolution: {width}x{height}")
+                            break
+        except Exception as e:
+            logger.warning(f"Could not auto-detect screen resolution: {e}")
+
+    # Set appropriate default DPI for Raspberry Pi screen sizes if not specified
+    if not dpi or dpi <= 0:
+        if width and width <= 1024:
+            dpi = 160
+        elif width and width <= 1920:
+            dpi = 213
+        elif width and width > 1920:
+            dpi = 320
+
     if width and width > 0:
         run_cmd(["waydroid", "prop", "set", "persist.waydroid.width", str(width)])
     if height and height > 0:

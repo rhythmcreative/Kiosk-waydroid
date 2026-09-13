@@ -85,11 +85,19 @@ if command -v pactl >/dev/null 2>&1; then
 fi
 
 # 5. Initialize Waydroid if not already initialized
-if [ ! -f /var/lib/waydroid/images/system.img ]; then
-    echo "Waydroid system image not found. Initializing Waydroid (VANILLA)..."
-    waydroid init -s VANILLA -f || waydroid init -s VANILLA || {
-        echo "Warning: waydroid init encountered errors."
-    }
+mkdir -p /etc/waydroid-extra
+ln -sf /var/lib/waydroid/images /etc/waydroid-extra/images 2>/dev/null || true
+
+if [ ! -f /var/lib/waydroid/lxc/waydroid/config ]; then
+    if [ -f /var/lib/waydroid/images/system.img ]; then
+        echo "Initializing Waydroid configuration from local images..."
+        waydroid init || true
+    else
+        echo "Waydroid system image not found. Initializing Waydroid (VANILLA)..."
+        waydroid init -s VANILLA || {
+            echo "Warning: waydroid init encountered errors."
+        }
+    fi
     echo "Waydroid initialized."
 fi
 
@@ -213,7 +221,24 @@ echo "Starting Waydroid container service..."
 if [ -f /usr/lib/waydroid/data/scripts/waydroid-net.sh ]; then
     sed -i "s/dnsmasq \$LXC_DHCP_CONFILE_ARG/dnsmasq --port=0 --dhcp-option=6,1.1.1.1,8.8.8.8 \$LXC_DHCP_CONFILE_ARG/" /usr/lib/waydroid/data/scripts/waydroid-net.sh
     sed -i "s|echo 1 > /proc/sys/net/ipv4/ip_forward|echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null \|\| true|" /usr/lib/waydroid/data/scripts/waydroid-net.sh
+    sed -i 's/LXC_USE_NFT="false"/LXC_USE_NFT="true"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh
+    sed -i 's/IPTABLES_BIN=".*"/IPTABLES_BIN="\/usr\/sbin\/iptables-nft"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh
+    sed -i 's/IP6TABLES_BIN=".*"/IP6TABLES_BIN="\/usr\/sbin\/ip6tables-nft"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh
+    sed -i 's/exit 1/exit 0/g' /usr/lib/waydroid/data/scripts/waydroid-net.sh
 fi
+
+# Ensure device permissions for Android non-root processes (surfaceflinger, graphics, input, binder)
+chmod 666 /dev/dri/* 2>/dev/null || true
+chmod 666 /dev/binder* /dev/binderfs/* 2>/dev/null || true
+chmod 666 /dev/uinput /dev/input/* 2>/dev/null || true
+
+# Pre-configure Waydroid hardware acceleration properties in waydroid.cfg
+echo "Configuring Waydroid hardware acceleration properties..."
+waydroid prop set ro.hardware.gralloc gbm 2>/dev/null || true
+waydroid prop set ro.hardware.egl mesa 2>/dev/null || true
+waydroid prop set debug.stagefright.ccodec 0 2>/dev/null || true
+waydroid prop set persist.waydroid.fake_touch true 2>/dev/null || true
+
 waydroid container start &
 CONTAINER_PID=$!
 
@@ -239,11 +264,24 @@ export WLR_NO_HARDWARE_CURSORS=1
 export WLR_RENDERER=gles2
 unset WLR_RENDERER_ALLOW_SOFTWARE
 
-if [ -e /dev/dri/card0 ]; then
-    export WLR_DRM_DEVICES=/dev/dri/card0
+# Auto-detect KMS scanout card (the card with connected outputs or connectors, e.g. card1 on RPi5)
+KMS_CARD=""
+for c in /sys/class/drm/card[0-9]*; do
+    if ls "$c"/card*-* >/dev/null 2>&1; then
+        card_name=$(basename "$c")
+        KMS_CARD="/dev/dri/$card_name"
+        break
+    fi
+done
+
+if [ -n "$KMS_CARD" ]; then
+    export WLR_DRM_DEVICES="$KMS_CARD"
+    echo "Configured Cage KMS display output on $KMS_CARD"
 fi
+
 if [ -e /dev/dri/renderD128 ]; then
     export WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
+    echo "Configured Cage 3D render node on /dev/dri/renderD128"
 fi
 
 # Bypass Cage 0.1.4 root check inside container
