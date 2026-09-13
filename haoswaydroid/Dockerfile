@@ -22,6 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dbus \
     dbus-user-session \
     socat \
+    gcc \
+    libc6-dev \
     # Graphics and Wayland Compositor (Cage)
     cage \
     seatd \
@@ -61,6 +63,11 @@ RUN mkdir -p /usr/share/keyrings \
     && apt-get update \
     && apt-get install -y --no-install-recommends waydroid \
     && rm -rf /var/lib/apt/lists/*
+
+# Compile root bypass library for Cage
+COPY libcage_root_bypass.c /
+RUN gcc -shared -fPIC /libcage_root_bypass.c -o /usr/lib/libcage_root_bypass.so \
+    && rm -f /libcage_root_bypass.c
 
 ARG BUILD_VERSION
 ENV ADDON_VERSION=${BUILD_VERSION}

@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.5}"
+echo " Version: ${ADDON_VERSION:-1.0.6}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -106,6 +106,11 @@ export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_NO_HARDWARE_CURSORS=1
 if [ -e /dev/dri/card0 ]; then
     export WLR_DRM_DEVICES=/dev/dri/card0
+fi
+
+# Bypass Cage 0.1.4 root check inside container
+if [ -f /usr/lib/libcage_root_bypass.so ]; then
+    export LD_PRELOAD=/usr/lib/libcage_root_bypass.so
 fi
 
 echo "Starting Cage Compositor on native DRM/KMS..."

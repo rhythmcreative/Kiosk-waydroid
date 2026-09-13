@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.6
+- Fix: Added `libcage_root_bypass.so` via `LD_PRELOAD`. Bypasses Cage 0.1.4's internal `drop_permissions()` check which refused to start when run inside a container as root.
+- Fix: Combined with `SEATD_VTBOUND=0` for immediate DRM/KMS hardware display initialization.
+
 ## 1.0.5
 - Fix: Set `SEATD_VTBOUND=0` in `seatd`. Disables VT/TTY switching at the seatd level so clients (Cage/wlroots) receive the active session signal immediately without requesting physical VT switching.
 - Fix: Ensured `/run/seatd.sock` permissions and symlink.
