@@ -236,11 +236,13 @@ echo "Starting Waydroid container service..."
 if [ -f /usr/lib/waydroid/data/scripts/waydroid-net.sh ]; then
     sed -i "s/dnsmasq \$LXC_DHCP_CONFILE_ARG/dnsmasq --port=0 --dhcp-option=6,1.1.1.1,8.8.8.8 \$LXC_DHCP_CONFILE_ARG/" /usr/lib/waydroid/data/scripts/waydroid-net.sh
     sed -i "s|echo 1 > /proc/sys/net/ipv4/ip_forward|echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null \|\| true|" /usr/lib/waydroid/data/scripts/waydroid-net.sh
-    sed -i 's/LXC_USE_NFT="false"/LXC_USE_NFT="true"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh
-    sed -i 's/IPTABLES_BIN=".*"/IPTABLES_BIN="\/usr\/sbin\/iptables-nft"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh
-    sed -i 's/IP6TABLES_BIN=".*"/IP6TABLES_BIN="\/usr\/sbin\/ip6tables-nft"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh
     sed -i 's/exit 1/exit 0/g' /usr/lib/waydroid/data/scripts/waydroid-net.sh
 fi
+
+# Ensure iptables forwarding and NAT masquerade for Waydroid bridge
+iptables -C FORWARD -i waydroid0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i waydroid0 -j ACCEPT 2>/dev/null || true
+iptables -C FORWARD -o waydroid0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -o waydroid0 -j ACCEPT 2>/dev/null || true
+iptables -t nat -C POSTROUTING -s 192.168.240.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 192.168.240.0/24 -j MASQUERADE 2>/dev/null || true
 
 # Ensure device permissions for Android non-root processes (surfaceflinger, graphics, input, binder)
 chmod 666 /dev/dri/* 2>/dev/null || true
@@ -258,6 +260,11 @@ waydroid container start &
 CONTAINER_PID=$!
 
 sleep 3
+
+# Re-verify iptables rules after waydroid-net brings bridge up
+iptables -C FORWARD -i waydroid0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i waydroid0 -j ACCEPT 2>/dev/null || true
+iptables -C FORWARD -o waydroid0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -o waydroid0 -j ACCEPT 2>/dev/null || true
+iptables -t nat -C POSTROUTING -s 192.168.240.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 192.168.240.0/24 -j MASQUERADE 2>/dev/null || true
 
 # 9. Start Waydroid Helper (Download & Install Kiosk Satellite, Grant Mic Permissions, Port Forward 2324)
 python3 /kiosk_helper.py &
