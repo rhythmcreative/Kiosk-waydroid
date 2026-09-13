@@ -135,11 +135,12 @@ if [ -f /var/lib/waydroid/images/system.img ]; then
                 "$TMP_SYS/system/etc/cgroups.json" > /var/lib/waydroid/overlay_rw/system/system/etc/cgroups.json
         fi
 
-        # Patch system rc files: comment out critical flags, rtprio limits, and task_profiles
+        # Patch system rc files: comment out unsupported capabilities, critical flags, rtprio limits, and task_profiles
         for f in "$TMP_SYS"/system/etc/init/*.rc; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
-            sed -e "s/^    critical/# critical/g" \
+            sed -e "s/^    capabilities /    # capabilities /g" \
+                -e "s/^    critical/# critical/g" \
                 -e "s/^    rlimit rtprio/# rlimit rtprio/g" \
                 -e "s/^    task_profiles/# task_profiles/g" \
                 "$f" > "/var/lib/waydroid/overlay_rw/system/system/etc/init/$base"
@@ -184,7 +185,8 @@ if [ -f /var/lib/waydroid/images/system.img ]; then
         for f in "$TMP_VND"/etc/init/*.rc; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
-            sed -e "s/^    critical/# critical/g" \
+            sed -e "s/^    capabilities /    # capabilities /g" \
+                -e "s/^    critical/# critical/g" \
                 -e "s/^    rlimit rtprio/# rlimit rtprio/g" \
                 -e "s/^    task_profiles/# task_profiles/g" \
                 "$f" > "/var/lib/waydroid/overlay_rw/vendor/etc/init/$base"

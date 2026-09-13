@@ -19,6 +19,10 @@ else
     waydroid session start &
 fi
 
+# Immediately launch Waydroid Full UI under Cage so screen activates
+echo "Launching Waydroid Full UI under Cage..."
+waydroid show-full-ui &
+
 echo "Waiting for Android boot..."
 for i in $(seq 1 120); do
     STATUS=$(waydroid shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
@@ -29,10 +33,6 @@ for i in $(seq 1 120); do
     fi
     sleep 2
 done
-
-# Display Waydroid Full UI under Cage
-echo "Launching Waydroid Full UI under Cage..."
-waydroid show-full-ui &
 
 # Keep Cage compositor session running without high CPU usage
 while true; do

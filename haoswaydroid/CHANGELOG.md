@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.17
+- Fix: Comment out `capabilities` in system/vendor rc files to prevent Android `init` from aborting `logd` with status 6 on unsupported capability sets.
+- Fix: Launch `waydroid show-full-ui &` immediately in `cage-run.sh` to eliminate the black screen delay during boot.
+
 ## 1.0.16
 - Fix: Remove `WLR_DRM_NO_MODIFIERS=1` to restore V3D 7.1 hardware accelerated surface modifiers required by wlroots `render.c` commit on Raspberry Pi 5.
 
