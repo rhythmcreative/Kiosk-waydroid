@@ -211,9 +211,39 @@ def ensure_kiosk_satellite_installed(options):
         need_install = False
 
     if need_install and os.path.exists(apk_path):
-        rc, out, err = run_cmd(["waydroid", "app", "install", apk_path])
+        # Copy APK to Android's shared storage so pm can access it
+        # /var/lib/waydroid/data/media/0/ maps to /sdcard/ inside Android
+        sdcard_apk_host = "/var/lib/waydroid/data/media/0/kiosk-satellite-update.apk"
+        sdcard_apk_android = "/sdcard/kiosk-satellite-update.apk"
+        try:
+            import shutil
+            shutil.copy2(apk_path, sdcard_apk_host)
+        except Exception as e:
+            logger.warning(f"Could not copy APK to sdcard path: {e} — falling back to direct install")
+            sdcard_apk_host = None
+
+        if sdcard_apk_host and os.path.exists(sdcard_apk_host):
+            # Use pm install -r: replaces the app but KEEPS all user data and settings
+            if already_installed:
+                logger.info("Updating APK with pm install -r (user data will be preserved)...")
+                rc, out, err = run_cmd(["waydroid", "shell", "-u", "0", "--",
+                                        "pm", "install", "-r", sdcard_apk_android])
+            else:
+                logger.info("Installing APK for the first time via pm install...")
+                rc, out, err = run_cmd(["waydroid", "shell", "-u", "0", "--",
+                                        "pm", "install", sdcard_apk_android])
+            # Clean up temp file
+            try:
+                os.remove(sdcard_apk_host)
+            except Exception:
+                pass
+        else:
+            # Fallback: direct install (may wipe data on update)
+            logger.warning("Falling back to waydroid app install (data may be reset on update)...")
+            rc, out, err = run_cmd(["waydroid", "app", "install", apk_path])
+
         if rc == 0:
-            logger.info("Kiosk Satellite APK installed successfully.")
+            logger.info("Kiosk Satellite APK installed/updated successfully — settings preserved.")
             with open(installed_version_file, "w") as f:
                 f.write(downloaded_ver)
             return True  # signal: permissions need to be granted
