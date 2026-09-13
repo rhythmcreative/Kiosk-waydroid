@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.16
+- Fix: Remove `WLR_DRM_NO_MODIFIERS=1` to restore V3D 7.1 hardware accelerated surface modifiers required by wlroots `render.c` commit on Raspberry Pi 5.
+
 ## 1.0.15
 - Fix: Add `WLR_DRM_NO_MODIFIERS=1` to fix wlroots `Basic output test failed for HDMI-A-1` atomic DRM plane test failure on Raspberry Pi 5.
 - Fix: Resolve `lmkd` crashing and `system_server` 100% CPU busy loop by configuring `lxc.mount.auto = cgroup:rw` and commenting out incompatible `task_profiles` in Android rc files on pure cgroup v2 kernels.

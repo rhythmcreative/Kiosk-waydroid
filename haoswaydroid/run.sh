@@ -270,7 +270,6 @@ export WLR_BACKENDS=drm,libinput
 export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_NO_HARDWARE_CURSORS=1
 export WLR_RENDERER=gles2
-export WLR_DRM_NO_MODIFIERS=1
 unset WLR_RENDERER_ALLOW_SOFTWARE
 
 # Auto-detect KMS scanout card (the card with connected outputs or connectors, e.g. card1 on RPi5)
