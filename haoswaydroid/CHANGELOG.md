@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.8
+- Fix: Add D-Bus policy for `id.waydro.Session` in `/etc/dbus-1/system.d/id.waydro.Session.conf` allowing root to own the session service on the shared system bus.
+- Fix: Optimize session launch in `cage-run.sh` to start Waydroid user session immediately without stalling on container status polling.
+
 ## 1.0.7
 - Fix: Upgrade Mesa drivers to version 25 via Debian bookworm-backports for full Raspberry Pi 5 VideoCore VII (V3D 7.1) hardware acceleration.
 - Fix: Install Xwayland binary required by Cage compositor.

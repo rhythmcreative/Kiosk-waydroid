@@ -77,7 +77,8 @@ RUN gcc -shared -fPIC /libcage_root_bypass.c -o /usr/lib/libcage_root_bypass.so 
 ARG BUILD_VERSION
 ENV ADDON_VERSION=${BUILD_VERSION}
 
-# Copy scripts and translations
+# Copy scripts, configs and translations
+COPY id.waydro.Session.conf /etc/dbus-1/system.d/id.waydro.Session.conf
 COPY translations/*.yaml /translations/
 COPY cage-run.sh /
 COPY kiosk_helper.py /

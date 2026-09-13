@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.6}"
+echo " Version: ${ADDON_VERSION:-1.0.8}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -12,7 +12,22 @@ if [ ! -L /var/lib/waydroid ] && [ -d /data/waydroid ]; then
 fi
 
 # 2. Setup D-Bus
-mkdir -p /run/dbus
+mkdir -p /run/dbus /etc/dbus-1/system.d
+cat << 'EOF' > /etc/dbus-1/system.d/id.waydro.Session.conf
+<!DOCTYPE busconfig PUBLIC
+ "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+    <policy user="root">
+        <allow own="id.waydro.Session"/>
+    </policy>
+    <policy context="default">
+        <allow own="id.waydro.Session"/>
+        <allow send_destination="id.waydro.Session"/>
+        <allow receive_sender="id.waydro.Session"/>
+    </policy>
+</busconfig>
+EOF
 rm -f /run/dbus/pid
 dbus-daemon --system --fork || true
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
