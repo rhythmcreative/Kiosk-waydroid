@@ -199,10 +199,18 @@ def grant_permissions():
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.FOREGROUND_SERVICE_CAMERA",
+        "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
     ]
     for perm in permissions:
         run_cmd(["waydroid", "shell", "pm", "grant", PACKAGE_NAME, perm])
     
+    # Grant appops for alert window
+    run_cmd(["waydroid", "shell", "appops", "set", PACKAGE_NAME, "SYSTEM_ALERT_WINDOW", "allow"])
+
     # Disable battery optimization
     run_cmd(["waydroid", "shell", "dumpsys", "deviceidle", "whitelist", f"+{PACKAGE_NAME}"])
 
@@ -226,6 +234,7 @@ def setup_port_forwarding(options):
 
 def provision_android():
     logger.info("Configuring Android system settings (disabling lockscreen & sleep)...")
+    run_cmd(["waydroid", "shell", "-u", "0", "/system/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup 2>/dev/null; echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || true"])
     run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "global", "device_provisioned", "1"])
     run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "secure", "user_setup_complete", "1"])
     run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "secure", "lockscreen.disabled", "1"])

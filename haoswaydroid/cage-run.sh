@@ -24,6 +24,7 @@ for i in $(seq 1 120); do
     STATUS=$(waydroid shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
     if [ "$STATUS" = "1" ]; then
         echo "Android boot completed!"
+        waydroid shell -u 0 /system/bin/sh -c "mount -o remount,rw /sys/fs/cgroup 2>/dev/null; echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || true" 2>/dev/null || true
         break
     fi
     sleep 2

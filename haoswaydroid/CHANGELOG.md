@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.0.14
+## 1.0.15
+- Fix: Add `WLR_DRM_NO_MODIFIERS=1` to fix wlroots `Basic output test failed for HDMI-A-1` atomic DRM plane test failure on Raspberry Pi 5.
+- Fix: Resolve `lmkd` crashing and `system_server` 100% CPU busy loop by configuring `lxc.mount.auto = cgroup:rw` and commenting out incompatible `task_profiles` in Android rc files on pure cgroup v2 kernels.
+- Fix: Fix `libcap_shim.c` to call real `SYS_capset` and `SYS_setpriority` syscalls with fallback, allowing network stack (`CAP_NET_RAW`, `CAP_NET_ADMIN`) and system services to receive capabilities.
+- Fix: Set `net.ipv4.ip_unprivileged_port_start=0` inside the container and Android netns to allow DHCP client to bind to port 68.
+- Fix: Grant `FOREGROUND_SERVICE` and `SYSTEM_ALERT_WINDOW` permissions/appops in `kiosk_helper.py` to prevent Kiosk Satellite ANR on service startup.
 - Performance: Fix severe framerate degradation (< 1 FPS) by explicitly routing wlroots GLES2 hardware rendering to `/dev/dri/renderD128` (VideoCore VII / V3D) via `WLR_RENDER_DRM_DEVICE` while preserving `/dev/dri/card0` for KMS scanout, eliminating CPU llvmpipe software rasterization fallback.
 - Fix: Configure `WLR_RENDERER=gles2` and remove `WLR_RENDERER_ALLOW_SOFTWARE` to prevent Cage from falling back to CPU rendering.
 - Fix: Disable Android lockscreen, keyguard, and screen timeout (`stay_on_while_plugged_in 3`, `screen_off_timeout 2147483647`, `lockscreen.disabled 1`) at boot to ensure direct touch response.

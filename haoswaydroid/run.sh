@@ -11,17 +11,24 @@ if [ ! -L /var/lib/waydroid ] && [ -d /data/waydroid ]; then
     mount --bind /data/waydroid /var/lib/waydroid 2>/dev/null || true
 fi
 
-# Remount cgroup and /dev as read-write
+# Remount cgroup, /proc/sys, and /dev as read-write
 mount -o remount,rw /sys/fs/cgroup 2>/dev/null || true
+mount -o remount,rw /proc/sys 2>/dev/null || true
 mount -o remount,rw /dev 2>/dev/null || true
 
-# Fix LXC post-stop hook and ensure cgroup v2 compatibility
+# Ensure unprivileged ports start at 0 for Android DHCP and network services
+echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || sysctl -w net.ipv4.ip_unprivileged_port_start=0 2>/dev/null || true
+
+# Fix LXC config for cgroup v2 read-write access and post-stop hook
 sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /usr/lib/waydroid/data/configs/config_base 2>/dev/null || true
+sed -i 's|cgroup:ro|cgroup:rw|g' /usr/lib/waydroid/data/configs/config_base 2>/dev/null || true
 if [ -f /var/lib/waydroid/lxc/waydroid/config_base ]; then
     sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /var/lib/waydroid/lxc/waydroid/config_base 2>/dev/null || true
+    sed -i 's|cgroup:ro|cgroup:rw|g' /var/lib/waydroid/lxc/waydroid/config_base 2>/dev/null || true
 fi
 if [ -f /var/lib/waydroid/lxc/waydroid/config ]; then
     sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /var/lib/waydroid/lxc/waydroid/config 2>/dev/null || true
+    sed -i 's|cgroup:ro|cgroup:rw|g' /var/lib/waydroid/lxc/waydroid/config 2>/dev/null || true
 fi
 
 # 2. Setup D-Bus
@@ -128,13 +135,13 @@ if [ -f /var/lib/waydroid/images/system.img ]; then
                 "$TMP_SYS/system/etc/cgroups.json" > /var/lib/waydroid/overlay_rw/system/system/etc/cgroups.json
         fi
 
-        # Patch system rc files: comment out unsupported capabilities, critical flags, and rtprio limits
+        # Patch system rc files: comment out critical flags, rtprio limits, and task_profiles
         for f in "$TMP_SYS"/system/etc/init/*.rc; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
-            sed -e "s/^    capabilities /    # capabilities /g" \
-                -e "s/^    critical/# critical/g" \
+            sed -e "s/^    critical/# critical/g" \
                 -e "s/^    rlimit rtprio/# rlimit rtprio/g" \
+                -e "s/^    task_profiles/# task_profiles/g" \
                 "$f" > "/var/lib/waydroid/overlay_rw/system/system/etc/init/$base"
         done
 
@@ -157,6 +164,7 @@ if [ -f /var/lib/waydroid/images/system.img ]; then
             base=$(basename "$f")
             sed -e "s/priority -20/priority 0/g" \
                 -e "s/critical/# critical/g" \
+                -e "s/^    task_profiles/# task_profiles/g" \
                 "$f" > "/var/lib/waydroid/overlay_rw/system/system/etc/init/hw/$base"
         done
         if [ -f /var/lib/waydroid/overlay_rw/system/system/etc/init/hw/init.zygote64_32.rc ]; then
@@ -176,9 +184,9 @@ if [ -f /var/lib/waydroid/images/system.img ]; then
         for f in "$TMP_VND"/etc/init/*.rc; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
-            sed -e "s/^    capabilities /    # capabilities /g" \
-                -e "s/^    critical/# critical/g" \
+            sed -e "s/^    critical/# critical/g" \
                 -e "s/^    rlimit rtprio/# rlimit rtprio/g" \
+                -e "s/^    task_profiles/# task_profiles/g" \
                 "$f" > "/var/lib/waydroid/overlay_rw/vendor/etc/init/$base"
         done
         umount "$TMP_VND" 2>/dev/null || true
@@ -262,6 +270,7 @@ export WLR_BACKENDS=drm,libinput
 export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_NO_HARDWARE_CURSORS=1
 export WLR_RENDERER=gles2
+export WLR_DRM_NO_MODIFIERS=1
 unset WLR_RENDERER_ALLOW_SOFTWARE
 
 # Auto-detect KMS scanout card (the card with connected outputs or connectors, e.g. card1 on RPi5)
