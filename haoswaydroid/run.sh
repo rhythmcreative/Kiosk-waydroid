@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.0}"
+echo " Version: ${ADDON_VERSION:-1.0.2}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -70,7 +70,10 @@ mkdir -p /run/seatd
 rm -f /run/seatd/seatd.sock
 seatd -g video &
 SEATD_PID=$!
+sleep 1
+chmod 0777 /run/seatd/seatd.sock 2>/dev/null || true
 export LIBSEAT_BACKEND=seatd
+export SEATD_SOCK=/run/seatd/seatd.sock
 
 # 7. Start Waydroid Container Service
 echo "Starting Waydroid container service..."
@@ -87,7 +90,12 @@ HELPER_PID=$!
 export XDG_RUNTIME_DIR=/run/user/0
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
-export WAYLAND_DISPLAY=wayland-0
 
-echo "Starting Cage Compositor with Waydroid Full UI..."
+# CRITICAL: Unset WAYLAND_DISPLAY and DISPLAY so wlroots initializes native DRM/KMS hardware backend
+unset WAYLAND_DISPLAY
+unset DISPLAY
+export WLR_BACKENDS=drm,libinput
+export WLR_LIBINPUT_NO_DEVICES=1
+
+echo "Starting Cage Compositor on native DRM/KMS..."
 exec cage -s -- /cage-run.sh

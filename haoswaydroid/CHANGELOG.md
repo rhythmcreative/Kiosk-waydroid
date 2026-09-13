@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2
+- Fix: Unset WAYLAND_DISPLAY and DISPLAY before starting Cage compositor to prevent wlroots attempting nested Wayland backend instead of native DRM/KMS.
+- Fix: Set WLR_BACKENDS=drm,libinput and WLR_LIBINPUT_NO_DEVICES=1.
+- Updated Cage launch sequence to synchronize with Waydroid container status.
+
 ## 1.0.1
 - Fix: Safe handling of binder nodes on read-only /dev filesystems.
 - Fix: Host-level binderfs detection and integration.
