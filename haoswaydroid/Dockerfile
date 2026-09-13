@@ -8,6 +8,9 @@ FROM $BUILD_FROM
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Enable Debian bookworm-backports repository for modern Mesa (supports Raspberry Pi 5 VideoCore VII / V3D 7.1)
+RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/sources.list
+
 # Install dependencies, repositories, Waydroid, Cage compositor, and audio tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -24,18 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     socat \
     gcc \
     libc6-dev \
-    # Graphics and Wayland Compositor (Cage)
+    # Graphics and Wayland Compositor (Cage & XWayland)
     cage \
+    xwayland \
     seatd \
     udev \
     libinput-bin \
     libinput10 \
-    libdrm2 \
-    libgl1-mesa-dri \
-    libegl1-mesa \
-    libgles2-mesa \
-    mesa-va-drivers \
-    mesa-vulkan-drivers \
     # LXC & Networking for Waydroid container
     lxc \
     dnsmasq \
@@ -54,6 +52,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-requests \
     python3-aiohttp \
     python3-pip \
+    && apt-get install -y -t bookworm-backports --no-install-recommends \
+    libdrm2 \
+    libgl1-mesa-dri \
+    libegl-mesa0 \
+    libgbm1 \
+    mesa-va-drivers \
+    mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Waydroid repository and install Waydroid

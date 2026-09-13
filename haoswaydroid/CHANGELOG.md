@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.7
+- Fix: Upgrade Mesa drivers to version 25 via Debian bookworm-backports for full Raspberry Pi 5 VideoCore VII (V3D 7.1) hardware acceleration.
+- Fix: Install Xwayland binary required by Cage compositor.
+- Fix: Add WLR_RENDERER_ALLOW_SOFTWARE=1 fallback for robust compositor initialization.
+
 ## 1.0.6
 - Fix: Added `libcage_root_bypass.so` via `LD_PRELOAD`. Bypasses Cage 0.1.4's internal `drop_permissions()` check which refused to start when run inside a container as root.
 - Fix: Combined with `SEATD_VTBOUND=0` for immediate DRM/KMS hardware display initialization.

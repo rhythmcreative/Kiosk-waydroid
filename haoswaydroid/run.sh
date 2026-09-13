@@ -104,6 +104,7 @@ unset DISPLAY
 export WLR_BACKENDS=drm,libinput
 export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_NO_HARDWARE_CURSORS=1
+export WLR_RENDERER_ALLOW_SOFTWARE=1
 if [ -e /dev/dri/card0 ]; then
     export WLR_DRM_DEVICES=/dev/dri/card0
 fi
