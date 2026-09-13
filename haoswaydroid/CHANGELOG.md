@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.4
+- Fix: Switch to libseat noop backend (`LIBSEAT_BACKEND=noop`) designed for containers without VT/TTY switching. Eliminates "Could not open target tty / tty0" permissions error.
+- Fix: Added `WLR_NO_HARDWARE_CURSORS=1` for clean rendering on Raspberry Pi DRM KMS.
+
 ## 1.0.3
 - Fix: Corrected seatd socket path to /run/seatd.sock with symlink to /run/seatd/seatd.sock.
 - Fix: Added /dev/tty and /dev/tty0 to devices list for direct DRM/KMS session access.

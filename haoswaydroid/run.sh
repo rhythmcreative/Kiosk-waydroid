@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.3}"
+echo " Version: ${ADDON_VERSION:-1.0.4}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -65,30 +65,18 @@ if [ ! -f /var/lib/waydroid/images/system.img ]; then
     echo "Waydroid initialized."
 fi
 
-# 6. Start Seatd for Wayland DRM/KMS session
-rm -f /run/seatd.sock /run/seatd/seatd.sock
-seatd -g video &
-SEATD_PID=$!
-sleep 1
-
-# Ensure /run/seatd.sock permissions and compatibility symlink
-mkdir -p /run/seatd
-chmod 0777 /run/seatd.sock 2>/dev/null || true
-ln -sf /run/seatd.sock /run/seatd/seatd.sock 2>/dev/null || true
-export SEATD_SOCK=/run/seatd.sock
-
-# 7. Start Waydroid Container Service
+# 6. Start Waydroid Container Service
 echo "Starting Waydroid container service..."
 waydroid container start &
 CONTAINER_PID=$!
 
 sleep 3
 
-# 8. Start Waydroid Helper (Download & Install Kiosk Satellite, Grant Mic Permissions, Port Forward 2324)
+# 7. Start Waydroid Helper (Download & Install Kiosk Satellite, Grant Mic Permissions, Port Forward 2324)
 python3 /kiosk_helper.py &
 HELPER_PID=$!
 
-# 9. Start Cage Wayland Compositor running Waydroid Session
+# 8. Start Cage Wayland Compositor running Waydroid Session
 export XDG_RUNTIME_DIR=/run/user/0
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
@@ -98,8 +86,11 @@ unset WAYLAND_DISPLAY
 unset DISPLAY
 
 # Configure hardware DRM/KMS backend
+# Use libseat noop backend (specifically designed for containers without VT/TTY access)
+export LIBSEAT_BACKEND=noop
 export WLR_BACKENDS=drm,libinput
 export WLR_LIBINPUT_NO_DEVICES=1
+export WLR_NO_HARDWARE_CURSORS=1
 if [ -e /dev/dri/card0 ]; then
     export WLR_DRM_DEVICES=/dev/dri/card0
 fi
