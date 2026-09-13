@@ -198,9 +198,21 @@ def setup_port_forwarding(options):
     # Start socat background proxy
     subprocess.Popen(["socat", f"TCP-LISTEN:{remote_port},fork,reuseaddr", f"EXEC:{proxy_script}"])
 
+def provision_android():
+    logger.info("Configuring Android system settings (disabling lockscreen & sleep)...")
+    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "global", "device_provisioned", "1"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "secure", "user_setup_complete", "1"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "secure", "lockscreen.disabled", "1"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "global", "stay_on_while_plugged_in", "3"])
+    run_cmd(["waydroid", "shell", "-u", "2000", "settings", "put", "system", "screen_off_timeout", "2147483647"])
+    run_cmd(["waydroid", "shell", "wm", "dismiss-keyguard"])
+    run_cmd(["waydroid", "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+
 def launch_app():
     logger.info(f"Launching {PACKAGE_NAME}...")
-    run_cmd(["waydroid", "app", "launch", PACKAGE_NAME])
+    run_cmd(["waydroid", "shell", "wm", "dismiss-keyguard"])
+    run_cmd(["waydroid", "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+    run_cmd(["waydroid", "shell", "--", "am", "start", "-n", f"{PACKAGE_NAME}/.MainActivity"])
 
 def is_app_running():
     rc, out, _ = run_cmd(["waydroid", "shell", "pidof", PACKAGE_NAME])
@@ -214,6 +226,9 @@ def main():
 
     # Wait for Waydroid to finish booting
     wait_for_waydroid_boot()
+
+    # Configure Android system settings
+    provision_android()
 
     # Install / Update Kiosk-Satellite APK
     ensure_kiosk_satellite_installed(options)

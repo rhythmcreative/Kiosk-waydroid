@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.0.13
+## 1.0.14
+- Performance: Fix severe framerate degradation (< 1 FPS) by explicitly routing wlroots GLES2 hardware rendering to `/dev/dri/renderD128` (VideoCore VII / V3D) via `WLR_RENDER_DRM_DEVICE` while preserving `/dev/dri/card0` for KMS scanout, eliminating CPU llvmpipe software rasterization fallback.
+- Fix: Configure `WLR_RENDERER=gles2` and remove `WLR_RENDERER_ALLOW_SOFTWARE` to prevent Cage from falling back to CPU rendering.
+- Fix: Disable Android lockscreen, keyguard, and screen timeout (`stay_on_while_plugged_in 3`, `screen_off_timeout 2147483647`, `lockscreen.disabled 1`) at boot to ensure direct touch response.
+- Fix: Launch Kiosk Satellite directly using `am start -n me.jxl.kiosk_satellite/.MainActivity` after dismissing keyguard to ensure immediate application presentation and touch focus.
 - Fix: Enable host udev support (`udev: true`) in add-on configuration so Cage and libinput can detect and tag USB touchscreens, mice, and keyboards.
 - Fix: Add `/dev/uinput`, `/dev/input/mice`, and `/dev/input/mouse0` to add-on device permissions.
 - Fix: Automatically initialize fallback `systemd-udevd` daemon and run `udevadm trigger` if host udev database is not mounted.

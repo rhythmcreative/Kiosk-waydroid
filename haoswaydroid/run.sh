@@ -236,9 +236,14 @@ unset DISPLAY
 export WLR_BACKENDS=drm,libinput
 export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_NO_HARDWARE_CURSORS=1
-export WLR_RENDERER_ALLOW_SOFTWARE=1
+export WLR_RENDERER=gles2
+unset WLR_RENDERER_ALLOW_SOFTWARE
+
 if [ -e /dev/dri/card0 ]; then
     export WLR_DRM_DEVICES=/dev/dri/card0
+fi
+if [ -e /dev/dri/renderD128 ]; then
+    export WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
 fi
 
 # Bypass Cage 0.1.4 root check inside container
