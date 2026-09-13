@@ -6,9 +6,12 @@ echo " Version: ${ADDON_VERSION:-1.0.12}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
-mkdir -p /data/waydroid /data/apk_cache /var/lib/waydroid
+mkdir -p /data/waydroid /data/waydroid_user /data/apk_cache /var/lib/waydroid /root/.local/share/waydroid
 if [ ! -L /var/lib/waydroid ] && [ -d /data/waydroid ]; then
     mount --bind /data/waydroid /var/lib/waydroid 2>/dev/null || true
+fi
+if [ -d /data/waydroid_user ]; then
+    mount --bind /data/waydroid_user /root/.local/share/waydroid 2>/dev/null || true
 fi
 
 # Remount cgroup, /proc/sys, and /dev as read-write
