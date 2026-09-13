@@ -116,12 +116,17 @@ if [ -f /var/lib/waydroid/images/system.img ]; then
 
     mkdir -p /var/lib/waydroid/overlay_rw/system/system/etc/init/hw \
              /var/lib/waydroid/overlay_rw/system/system/lib64 \
+             /var/lib/waydroid/overlay_rw/system/system/bin \
              /var/lib/waydroid/overlay_rw/vendor/etc/init
 
-    # Install capability & priority shim library
+    # Install capability & priority shim library and dummy lmkd daemon
     if [ -f /usr/lib/libcap_shim.so ]; then
         cp /usr/lib/libcap_shim.so /var/lib/waydroid/overlay_rw/system/system/lib64/libcap_shim.so
         chmod 755 /var/lib/waydroid/overlay_rw/system/system/lib64/libcap_shim.so
+    fi
+    if [ -f /usr/bin/dummy_lmkd ]; then
+        cp /usr/bin/dummy_lmkd /var/lib/waydroid/overlay_rw/system/system/bin/lmkd
+        chmod 755 /var/lib/waydroid/overlay_rw/system/system/bin/lmkd
     fi
 
     TMP_SYS=/tmp/wd_sys

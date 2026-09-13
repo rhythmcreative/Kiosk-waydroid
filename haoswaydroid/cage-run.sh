@@ -19,16 +19,16 @@ else
     waydroid session start &
 fi
 
-# Immediately launch Waydroid Full UI under Cage so screen activates
-echo "Launching Waydroid Full UI under Cage..."
-waydroid show-full-ui &
-
 echo "Waiting for Android boot..."
 for i in $(seq 1 120); do
     STATUS=$(waydroid shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
     if [ "$STATUS" = "1" ]; then
         echo "Android boot completed!"
         waydroid shell -u 0 /system/bin/sh -c "mount -o remount,rw /sys/fs/cgroup 2>/dev/null; echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || true" 2>/dev/null || true
+        waydroid shell -u 0 /system/bin/sh -c "if ! pidof lmkd >/dev/null 2>&1; then /system/bin/lmkd & fi" 2>/dev/null || true
+        sleep 2
+        echo "Activating Waydroid Full UI in Cage..."
+        waydroid show-full-ui &
         break
     fi
     sleep 2
