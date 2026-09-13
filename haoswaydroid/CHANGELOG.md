@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.10
+- Fix: Prevent `waydroid-net.sh` failure on read-only `/proc/sys/net/ipv4/ip_forward` inside Docker container.
+
 ## 1.0.9
 - Fix: Prevent `dnsmasq` port 53 collision on host network when DNS servers like Pi-hole or CoreDNS are active on the host. Configure internal bridge with `--port=0` (DHCP only) and direct public upstream DNS resolvers.
 
