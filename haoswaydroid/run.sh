@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.2}"
+echo " Version: ${ADDON_VERSION:-1.0.3}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -66,14 +66,16 @@ if [ ! -f /var/lib/waydroid/images/system.img ]; then
 fi
 
 # 6. Start Seatd for Wayland DRM/KMS session
-mkdir -p /run/seatd
-rm -f /run/seatd/seatd.sock
+rm -f /run/seatd.sock /run/seatd/seatd.sock
 seatd -g video &
 SEATD_PID=$!
 sleep 1
-chmod 0777 /run/seatd/seatd.sock 2>/dev/null || true
-export LIBSEAT_BACKEND=seatd
-export SEATD_SOCK=/run/seatd/seatd.sock
+
+# Ensure /run/seatd.sock permissions and compatibility symlink
+mkdir -p /run/seatd
+chmod 0777 /run/seatd.sock 2>/dev/null || true
+ln -sf /run/seatd.sock /run/seatd/seatd.sock 2>/dev/null || true
+export SEATD_SOCK=/run/seatd.sock
 
 # 7. Start Waydroid Container Service
 echo "Starting Waydroid container service..."
@@ -91,11 +93,16 @@ export XDG_RUNTIME_DIR=/run/user/0
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
 
-# CRITICAL: Unset WAYLAND_DISPLAY and DISPLAY so wlroots initializes native DRM/KMS hardware backend
+# Clean nested display variables
 unset WAYLAND_DISPLAY
 unset DISPLAY
+
+# Configure hardware DRM/KMS backend
 export WLR_BACKENDS=drm,libinput
 export WLR_LIBINPUT_NO_DEVICES=1
+if [ -e /dev/dri/card0 ]; then
+    export WLR_DRM_DEVICES=/dev/dri/card0
+fi
 
 echo "Starting Cage Compositor on native DRM/KMS..."
 exec cage -s -- /cage-run.sh

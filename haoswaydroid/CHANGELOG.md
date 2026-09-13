@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3
+- Fix: Corrected seatd socket path to /run/seatd.sock with symlink to /run/seatd/seatd.sock.
+- Fix: Added /dev/tty and /dev/tty0 to devices list for direct DRM/KMS session access.
+- Fix: Explicitly point WLR_DRM_DEVICES to /dev/dri/card0 for HDMI output.
+
 ## 1.0.2
 - Fix: Unset WAYLAND_DISPLAY and DISPLAY before starting Cage compositor to prevent wlroots attempting nested Wayland backend instead of native DRM/KMS.
 - Fix: Set WLR_BACKENDS=drm,libinput and WLR_LIBINPUT_NO_DEVICES=1.
