@@ -94,13 +94,17 @@ options:
   keep_alive: true
 
 schema:
-  apk_url: "str?"
-  auto_update_apk: "bool"
-  display_width: "int?"
-  display_height: "int?"
-  display_dpi: "int?"
-  display_orientation: "list(auto|0|90|180|270)?"
-  remote_admin_port: "port"
-  enable_camera: "bool"
-  audio_volume: "int"
-  keep_alive: "bool"
+  apk_url: str?
+  auto_update_apk: bool
+  display_width: int(0,)
+  display_height: int(0,)
+  display_dpi: int(0,)
+  display_orientation: list(auto|portrait|landscape|reverse-portrait|reverse-landscape)
+  remote_admin_port: int(1024,49151)
+  enable_camera: bool
+  audio_volume: int(0,100)
+  keep_alive: bool
+
+translations:
+  - en
+  - es

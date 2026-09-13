@@ -16,7 +16,7 @@ configuration:
     description: "Screen pixel density DPI (0 for auto)."
   display_orientation:
     name: "Display Orientation"
-    description: "Force screen rotation (auto, 0, 90, 180, 270 degrees)."
+    description: "Screen rotation orientation (auto, portrait, landscape, reverse-portrait, reverse-landscape)."
   remote_admin_port:
     name: "Remote Admin Web Port"
     description: "Port to access the Kiosk Satellite Remote Administration web interface (default: 2324)."

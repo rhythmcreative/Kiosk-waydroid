@@ -3,7 +3,7 @@
 # File: Dockerfile
 ################################################################################
 
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/home-assistant/base-debian:bookworm
 FROM $BUILD_FROM
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -67,10 +67,11 @@ ENV ADDON_VERSION=${BUILD_VERSION}
 
 # Copy scripts and translations
 COPY translations/*.yaml /translations/
+COPY cage-run.sh /
 COPY kiosk_helper.py /
 COPY run.sh /
 
-RUN chmod a+x /run.sh /kiosk_helper.py
+RUN chmod a+x /run.sh /kiosk_helper.py /cage-run.sh
 
 WORKDIR /
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Waydroid Kiosk Satellite Helper
-Manages APK download, permissions, display resolution, audio/mic setup, and watchdog.
+Manages APK download, permissions, display resolution, audio/mic setup, port forwarding, and watchdog.
 """
 
 import json
@@ -75,7 +75,7 @@ def download_file(url, target_path):
     try:
         urllib.request.urlretrieve(url, temp_path)
         os.replace(temp_path, target_path)
-        logger.info(f"Downloaded successfully.")
+        logger.info("Downloaded successfully.")
         return True
     except Exception as e:
         logger.error(f"Failed to download {url}: {e}")
@@ -108,7 +108,14 @@ def configure_display(options):
     if dpi and dpi > 0:
         run_cmd(["waydroid", "prop", "set", "persist.waydroid.dpi", str(dpi)])
     if orientation and orientation != "auto":
-        run_cmd(["waydroid", "prop", "set", "persist.waydroid.orientation", str(orientation)])
+        orientation_map = {
+            "portrait": "0",
+            "landscape": "90",
+            "reverse-portrait": "180",
+            "reverse-landscape": "270"
+        }
+        val = orientation_map.get(orientation, str(orientation))
+        run_cmd(["waydroid", "prop", "set", "persist.waydroid.orientation", val])
 
 def ensure_kiosk_satellite_installed(options):
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -173,6 +180,21 @@ def grant_permissions():
     # Disable battery optimization
     run_cmd(["waydroid", "shell", "dumpsys", "deviceidle", "whitelist", f"+{PACKAGE_NAME}"])
 
+def setup_port_forwarding(options):
+    remote_port = options.get("remote_admin_port", 2324)
+    # Find Waydroid IP address
+    rc, out, _ = run_cmd("waydroid shell ip -4 addr show eth0 | grep inet | awk '{print $2}' | cut -d/ -f1", shell=True)
+    waydroid_ip = out.strip()
+    if not waydroid_ip:
+        # Fallback to standard Waydroid IP
+        waydroid_ip = "192.168.240.112"
+    
+    logger.info(f"Setting up port forward for Kiosk Satellite web admin {remote_port} -> {waydroid_ip}:2324")
+    # Kill any existing socat on remote_port
+    run_cmd(f"pkill -f 'socat.*{remote_port}'", shell=True)
+    # Start socat background proxy
+    subprocess.Popen(["socat", f"TCP-LISTEN:{remote_port},fork,reuseaddr", f"TCP:{waydroid_ip}:2324"])
+
 def launch_app():
     logger.info(f"Launching {PACKAGE_NAME}...")
     run_cmd(["waydroid", "app", "launch", PACKAGE_NAME])
@@ -195,6 +217,9 @@ def main():
 
     # Grant permissions (Mic, Camera, Notifications, etc.)
     grant_permissions()
+
+    # Setup remote web admin port forwarding
+    setup_port_forwarding(options)
 
     # Launch app
     launch_app()

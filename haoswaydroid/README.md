@@ -8,7 +8,6 @@ Launches Waydroid + Cage Wayland Compositor running [Kiosk Satellite](https://gi
 
 > **Before you start:** A display must be connected to HDMI/DisplayPort before starting. **Protection mode** MUST be toggled **OFF** in the Add-on settings so Waydroid can access `/dev/dri`, `/dev/binderfs`, and input devices.
 
-[![Buy Me a Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://www.buymeacoffee.com/rhythmcreative)
 
 ---
 

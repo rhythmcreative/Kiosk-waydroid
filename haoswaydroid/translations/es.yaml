@@ -16,7 +16,7 @@ configuration:
     description: "Densidad de píxeles DPI de la pantalla (0 para automático)."
   display_orientation:
     name: "Orientación de pantalla"
-    description: "Forzar rotación de pantalla (auto, 0, 90, 180, 270 grados)."
+    description: "Orientación y rotación de pantalla (auto, portrait, landscape, reverse-portrait, reverse-landscape)."
   remote_admin_port:
     name: "Puerto Web de Administración Remota"
     description: "Puerto para acceder a la interfaz web de administración remota de Kiosk Satellite (por defecto: 2324)."

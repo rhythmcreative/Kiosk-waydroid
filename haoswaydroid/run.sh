@@ -9,7 +9,6 @@ echo "=========================================================="
 # 1. Setup Persistent Storage
 mkdir -p /data/waydroid /data/apk_cache /var/lib/waydroid
 if [ ! -L /var/lib/waydroid ] && [ -d /data/waydroid ]; then
-    # Bind mount persistent storage if not already mounted
     mount --bind /data/waydroid /var/lib/waydroid 2>/dev/null || true
 fi
 
@@ -35,15 +34,21 @@ for node in binder vndbinder hwbinder; do
 done
 
 # 4. Setup Audio & Microphone (PulseAudio)
-mkdir -p /root/.config/pulse
+mkdir -p /root/.config/pulse /run/user/0/pulse
+chmod 0700 /run/user/0 /run/user/0/pulse 2>/dev/null || true
+
 if [ -S /run/audio/pulse.sock ]; then
     export PULSE_SERVER="unix:/run/audio/pulse.sock"
-    echo "Found HAOS PulseAudio socket at /run/audio/pulse.sock"
+    ln -sf /run/audio/pulse.sock /run/user/0/pulse/native 2>/dev/null || true
+    echo "Connected to HAOS PulseAudio socket at /run/audio/pulse.sock"
 elif [ -n "$PULSE_SERVER" ]; then
     echo "Using PULSE_SERVER=$PULSE_SERVER"
 else
     # Start internal PulseAudio daemon if host socket is not mounted
     pulseaudio --start --exit-idle-time=-1 || true
+    if [ -S /run/user/0/pulse/native ]; then
+        export PULSE_SERVER="unix:/run/user/0/pulse/native"
+    fi
 fi
 
 # Test audio/mic access
@@ -76,7 +81,7 @@ CONTAINER_PID=$!
 
 sleep 3
 
-# 8. Start Waydroid Helper (Download & Install Kiosk Satellite, Grant Mic Permissions)
+# 8. Start Waydroid Helper (Download & Install Kiosk Satellite, Grant Mic Permissions, Port Forward 2324)
 python3 /kiosk_helper.py &
 HELPER_PID=$!
 
@@ -87,5 +92,4 @@ chmod 0700 "$XDG_RUNTIME_DIR"
 export WAYLAND_DISPLAY=wayland-0
 
 echo "Starting Cage Compositor with Waydroid Full UI..."
-# Cage launches Waydroid in full screen kiosk mode directly on DRM/KMS
-exec cage -s -- waydroid show-full-ui
+exec cage -s -- /cage-run.sh
