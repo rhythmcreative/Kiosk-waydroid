@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.9
+- Fix: Prevent `dnsmasq` port 53 collision on host network when DNS servers like Pi-hole or CoreDNS are active on the host. Configure internal bridge with `--port=0` (DHCP only) and direct public upstream DNS resolvers.
+
 ## 1.0.8
 - Fix: Add D-Bus policy for `id.waydro.Session` in `/etc/dbus-1/system.d/id.waydro.Session.conf` allowing root to own the session service on the shared system bus.
 - Fix: Optimize session launch in `cage-run.sh` to start Waydroid user session immediately without stalling on container status polling.

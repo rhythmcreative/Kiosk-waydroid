@@ -67,6 +67,7 @@ RUN mkdir -p /usr/share/keyrings \
     && echo "deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/waydroid.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends waydroid \
+    && sed -i "s/dnsmasq \$LXC_DHCP_CONFILE_ARG/dnsmasq --port=0 --dhcp-option=6,1.1.1.1,8.8.8.8 \$LXC_DHCP_CONFILE_ARG/" /usr/lib/waydroid/data/scripts/waydroid-net.sh \
     && rm -rf /var/lib/apt/lists/*
 
 # Compile root bypass library for Cage

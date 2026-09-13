@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.8}"
+echo " Version: ${ADDON_VERSION:-1.0.9}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -97,6 +97,9 @@ export LIBSEAT_BACKEND=seatd
 
 # 7. Start Waydroid Container Service
 echo "Starting Waydroid container service..."
+if [ -f /usr/lib/waydroid/data/scripts/waydroid-net.sh ]; then
+    sed -i "s/dnsmasq \$LXC_DHCP_CONFILE_ARG/dnsmasq --port=0 --dhcp-option=6,1.1.1.1,8.8.8.8 \$LXC_DHCP_CONFILE_ARG/" /usr/lib/waydroid/data/scripts/waydroid-net.sh
+fi
 waydroid container start &
 CONTAINER_PID=$!
 
