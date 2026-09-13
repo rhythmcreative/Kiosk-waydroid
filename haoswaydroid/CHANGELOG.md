@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.13
+- Fix: Enable host udev support (`udev: true`) in add-on configuration so Cage and libinput can detect and tag USB touchscreens, mice, and keyboards.
+- Fix: Add `/dev/uinput`, `/dev/input/mice`, and `/dev/input/mouse0` to add-on device permissions.
+- Fix: Automatically initialize fallback `systemd-udevd` daemon and run `udevadm trigger` if host udev database is not mounted.
+- Fix: Ensure read/write access permissions on all `/dev/input/*` event nodes at container startup.
+
 ## 1.0.12
 - Fix: Resolved Android container reboot loop caused by bpfloader failure on Linux 6.12+ kernels by disabling `reboot_on_failure` and setting `bpf.progs_loaded 1`.
 - Fix: Introduced `libcap_shim.so` to stub missing container capabilities (`capset`, `cap_set_proc`, `cap_get_flag`) and process priority (`setpriority`), preventing aborts in `lmkd`, `logd`, `audioserver`, and `zygote`.

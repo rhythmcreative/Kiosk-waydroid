@@ -3,7 +3,7 @@ name: "Waydroid Kiosk Satellite"
 description: |
   Start Waydroid (Android container) in kiosk mode on local HAOS display
   with full microphone, sound, touch, and Kiosk-Satellite integration.
-version: "1.0.12"
+version: "1.0.13"
 slug: "haoswaydroid"
 url: "https://github.com/rhythmcreative/Kiosk-waydroid/tree/main/haoswaydroid"
 
@@ -22,6 +22,7 @@ homeassistant_api: true
 auth_api: true
 audio: true
 usb: true
+udev: true
 full_access: true
 apparmor: false
 
@@ -43,6 +44,9 @@ devices:
   - /dev/ashmem
   - /dev/fuse
   - /dev/snd
+  - /dev/uinput
+  - /dev/input/mice
+  - /dev/input/mouse0
   - /dev/input/event0
   - /dev/input/event1
   - /dev/input/event2

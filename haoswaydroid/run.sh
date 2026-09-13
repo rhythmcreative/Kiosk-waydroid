@@ -178,7 +178,22 @@ if [ -f /var/lib/waydroid/images/system.img ]; then
     fi
 fi
 
-# 7. Start Seatd for Wayland DRM/KMS session in non-VT mode
+# 7. Configure Input Devices & Host Udev for Cage / Libinput
+echo "Configuring input devices and udev for touchscreen/mouse/keyboard..."
+chmod -R a+rw /dev/input 2>/dev/null || true
+chmod 0666 /dev/uinput 2>/dev/null || true
+
+# Initialize udev if host udev database not mounted
+if [ ! -d /run/udev/data ]; then
+    if [ -x /usr/lib/systemd/systemd-udevd ]; then
+        echo "Starting systemd-udevd..."
+        /usr/lib/systemd/systemd-udevd --daemon || true
+        udevadm trigger || true
+        udevadm settle --timeout=5 || true
+    fi
+fi
+
+# 8. Start Seatd for Wayland DRM/KMS session in non-VT mode
 rm -f /run/seatd.sock /run/seatd/seatd.sock
 mkdir -p /run/seatd
 
@@ -193,7 +208,7 @@ ln -sf /run/seatd.sock /run/seatd/seatd.sock 2>/dev/null || true
 export SEATD_SOCK=/run/seatd.sock
 export LIBSEAT_BACKEND=seatd
 
-# 8. Start Waydroid Container Service
+# 9. Start Waydroid Container Service
 echo "Starting Waydroid container service..."
 if [ -f /usr/lib/waydroid/data/scripts/waydroid-net.sh ]; then
     sed -i "s/dnsmasq \$LXC_DHCP_CONFILE_ARG/dnsmasq --port=0 --dhcp-option=6,1.1.1.1,8.8.8.8 \$LXC_DHCP_CONFILE_ARG/" /usr/lib/waydroid/data/scripts/waydroid-net.sh
