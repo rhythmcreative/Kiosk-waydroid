@@ -292,12 +292,16 @@ def main():
     # Setup remote web admin port forwarding
     setup_port_forwarding(options)
 
-    # Launch app
-    launch_app()
+    # Launch app (only if auto_launch_kiosk is enabled)
+    auto_launch = options.get("auto_launch_kiosk", True)
+    if auto_launch:
+        launch_app()
+    else:
+        logger.info("auto_launch_kiosk is disabled — skipping Kiosk Satellite launch.")
 
     # Keep alive watchdog loop
     keep_alive = options.get("keep_alive", True)
-    if keep_alive:
+    if keep_alive and auto_launch:
         logger.info("Watchdog loop started.")
         while True:
             time.sleep(10)

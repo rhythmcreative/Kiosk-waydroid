@@ -3,7 +3,7 @@ name: "Waydroid Kiosk Satellite"
 description: |
   Start Waydroid (Android container) in kiosk mode on local HAOS display
   with full microphone, sound, touch, and Kiosk-Satellite integration.
-version: "1.0.21"
+version: "1.0.22"
 slug: "haoswaydroid"
 url: "https://github.com/rhythmcreative/Kiosk-waydroid/tree/main/haoswaydroid"
 
@@ -100,6 +100,7 @@ tmpfs: true
 options:
   apk_url: ""
   auto_update_apk: true
+  auto_launch_kiosk: true
   display_width: 0
   display_height: 0
   display_dpi: 0
@@ -112,6 +113,7 @@ options:
 schema:
   apk_url: str?
   auto_update_apk: bool
+  auto_launch_kiosk: bool
   display_width: int(0,)
   display_height: int(0,)
   display_dpi: int(0,)

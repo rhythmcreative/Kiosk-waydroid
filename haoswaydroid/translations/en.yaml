@@ -5,6 +5,9 @@ configuration:
   auto_update_apk:
     name: "Auto-update APK"
     description: "Automatically download and install new versions of Kiosk Satellite when released."
+  auto_launch_kiosk:
+    name: "Auto-launch Kiosk Satellite"
+    description: "Automatically launch Kiosk Satellite when the add-on starts. Disable this if you want to start Android without opening the app."
   display_width:
     name: "Display Width"
     description: "Custom display width in pixels (0 for native/auto)."
