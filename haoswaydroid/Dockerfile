@@ -70,6 +70,10 @@ RUN mkdir -p /usr/share/keyrings \
     && apt-get install -y --no-install-recommends waydroid \
     && sed -i "s/dnsmasq \$LXC_DHCP_CONFILE_ARG/dnsmasq --port=0 --dhcp-option=6,1.1.1.1,8.8.8.8 \$LXC_DHCP_CONFILE_ARG/" /usr/lib/waydroid/data/scripts/waydroid-net.sh \
     && sed -i "s|echo 1 > /proc/sys/net/ipv4/ip_forward|echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null \|\| true|" /usr/lib/waydroid/data/scripts/waydroid-net.sh \
+    && sed -i 's/LXC_USE_NFT="false"/LXC_USE_NFT="true"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh \
+    && sed -i 's/IPTABLES_BIN=".*"/IPTABLES_BIN="\/usr\/sbin\/iptables-nft"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh \
+    && sed -i 's/IP6TABLES_BIN=".*"/IP6TABLES_BIN="\/usr\/sbin\/ip6tables-nft"/' /usr/lib/waydroid/data/scripts/waydroid-net.sh \
+    && sed -i 's/exit 1/exit 0/g' /usr/lib/waydroid/data/scripts/waydroid-net.sh \
     && rm -rf /var/lib/apt/lists/*
 
 # Compile root bypass library for Cage, capability shim for Waydroid, and dummy lmkd daemon
