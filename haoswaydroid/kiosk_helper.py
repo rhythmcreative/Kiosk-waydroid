@@ -238,11 +238,14 @@ def launch_app():
     logger.info(f"Launching {PACKAGE_NAME}...")
     run_cmd(["waydroid", "shell", "wm", "dismiss-keyguard"])
     run_cmd(["waydroid", "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
-    run_cmd(["waydroid", "shell", "--", "am", "start", "-n", f"{PACKAGE_NAME}/.MainActivity"])
+    run_cmd(["waydroid", "app", "launch", PACKAGE_NAME])
 
 def is_app_running():
     rc, out, _ = run_cmd(["waydroid", "shell", "pidof", PACKAGE_NAME])
-    return rc == 0 and bool(out.strip())
+    if rc == 0 and bool(out.strip()):
+        return True
+    rc, out, _ = run_cmd(["waydroid", "shell", "dumpsys", "window"])
+    return PACKAGE_NAME in out
 
 def main():
     options = load_options()
