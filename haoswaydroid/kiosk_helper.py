@@ -143,47 +143,88 @@ def configure_display(options):
         val = orientation_map.get(orientation, str(orientation))
         run_cmd(["waydroid", "prop", "set", "persist.waydroid.orientation", val])
 
+def is_package_installed_in_android():
+    """Check if Kiosk Satellite is already installed in Android."""
+    rc, out, _ = run_cmd(["waydroid", "shell", "pm", "list", "packages", PACKAGE_NAME])
+    return rc == 0 and PACKAGE_NAME in out
+
 def ensure_kiosk_satellite_installed(options):
     os.makedirs(CACHE_DIR, exist_ok=True)
     custom_url = options.get("apk_url", "").strip()
     auto_update = options.get("auto_update_apk", True)
-    
+
     machine_arch = platform.machine()
-    
+
     apk_path = os.path.join(CACHE_DIR, "kiosk-satellite.apk")
     version_file = os.path.join(CACHE_DIR, "version.txt")
+    installed_version_file = os.path.join(CACHE_DIR, "installed_version.txt")
 
-    current_installed_ver = ""
+    # Version that was last downloaded
+    downloaded_ver = ""
     if os.path.exists(version_file):
         with open(version_file, "r") as f:
-            current_installed_ver = f.read().strip()
+            downloaded_ver = f.read().strip()
+
+    # Version that was last installed into Android
+    installed_ver = ""
+    if os.path.exists(installed_version_file):
+        with open(installed_version_file, "r") as f:
+            installed_ver = f.read().strip()
+
+    new_apk_downloaded = False
 
     if custom_url:
         logger.info(f"Using custom APK URL: {custom_url}")
         if not os.path.exists(apk_path) or auto_update:
             if download_file(custom_url, apk_path):
-                current_installed_ver = "custom"
+                downloaded_ver = "custom"
+                new_apk_downloaded = (installed_ver != "custom")
+                with open(version_file, "w") as f:
+                    f.write(downloaded_ver)
     else:
         logger.info("Checking latest Kiosk Satellite release...")
         latest_url, latest_tag = get_latest_release_apk_url(machine_arch)
         if latest_url:
-            if not os.path.exists(apk_path) or (auto_update and latest_tag != current_installed_ver):
+            if not os.path.exists(apk_path) or (auto_update and latest_tag != downloaded_ver):
                 logger.info(f"Newer or missing APK detected (version: {latest_tag})")
                 if download_file(latest_url, apk_path):
+                    downloaded_ver = latest_tag
+                    new_apk_downloaded = True
                     with open(version_file, "w") as f:
-                        f.write(latest_tag)
+                        f.write(downloaded_ver)
+            else:
+                logger.info(f"APK already up to date (version: {downloaded_ver})")
         else:
             logger.warning("Could not check latest release on GitHub.")
 
-    if os.path.exists(apk_path):
-        logger.info(f"Installing APK ({apk_path}) into Waydroid...")
+    # Check if app is already installed in Android with the current version
+    already_installed = is_package_installed_in_android()
+
+    if not already_installed:
+        logger.info("Kiosk Satellite not found in Android — installing for the first time.")
+        need_install = True
+    elif new_apk_downloaded:
+        logger.info(f"New APK version downloaded ({downloaded_ver}) — updating Android installation.")
+        need_install = True
+    else:
+        logger.info(f"Kiosk Satellite already installed (version: {installed_ver}) — skipping reinstall to preserve settings.")
+        need_install = False
+
+    if need_install and os.path.exists(apk_path):
         rc, out, err = run_cmd(["waydroid", "app", "install", apk_path])
         if rc == 0:
             logger.info("Kiosk Satellite APK installed successfully.")
+            with open(installed_version_file, "w") as f:
+                f.write(downloaded_ver)
+            return True  # signal: permissions need to be granted
         else:
             logger.error(f"APK installation error: {err} {out}")
-    else:
-        logger.warning(f"No APK found at {apk_path}. Proceeding with existing installation if present.")
+            return False
+    elif not os.path.exists(apk_path) and not already_installed:
+        logger.warning(f"No APK found at {apk_path} and app not in Android. Cannot install.")
+        return False
+
+    return need_install  # True only when we actually installed
 
 def grant_permissions():
     logger.info("Granting Android permissions to Kiosk Satellite...")
@@ -283,11 +324,16 @@ def main():
     # Configure Android system settings
     provision_android()
 
-    # Install / Update Kiosk-Satellite APK
-    ensure_kiosk_satellite_installed(options)
+    # Install / Update Kiosk-Satellite APK (returns True if a fresh install happened)
+    just_installed = ensure_kiosk_satellite_installed(options)
 
-    # Grant permissions (Mic, Camera, Notifications, etc.)
-    grant_permissions()
+    # Grant permissions only on fresh install/update — not on every boot
+    # (reinstalling resets permissions, but if we didn't reinstall we don't need to re-grant)
+    if just_installed:
+        logger.info("Fresh install detected — granting permissions.")
+        grant_permissions()
+    else:
+        logger.info("App already installed — skipping permission grant to preserve user settings.")
 
     # Setup remote web admin port forwarding
     setup_port_forwarding(options)
