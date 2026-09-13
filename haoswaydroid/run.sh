@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.11}"
+echo " Version: ${ADDON_VERSION:-1.0.12}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -17,62 +17,12 @@ mount -o remount,rw /dev 2>/dev/null || true
 
 # Fix LXC post-stop hook and ensure cgroup v2 compatibility
 sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /usr/lib/waydroid/data/configs/config_base 2>/dev/null || true
+if [ -f /var/lib/waydroid/lxc/waydroid/config_base ]; then
+    sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /var/lib/waydroid/lxc/waydroid/config_base 2>/dev/null || true
+fi
 if [ -f /var/lib/waydroid/lxc/waydroid/config ]; then
     sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /var/lib/waydroid/lxc/waydroid/config 2>/dev/null || true
 fi
-
-# Overlay Android cgroups.json for cgroup v2 compatibility
-mkdir -p /var/lib/waydroid/overlay_rw/system/etc
-cat << 'EOF' > /var/lib/waydroid/overlay_rw/system/etc/cgroups.json
-{
-  "Cgroups": [
-    {
-      "Controller": "blkio",
-      "Path": "/dev/blkio",
-      "Mode": "0775",
-      "UID": "system",
-      "GID": "system",
-      "Optional": true
-    },
-    {
-      "Controller": "cpu",
-      "Path": "/dev/cpuctl",
-      "Mode": "0755",
-      "UID": "system",
-      "GID": "system",
-      "Optional": true
-    },
-    {
-      "Controller": "cpuset",
-      "Path": "/dev/cpuset",
-      "Mode": "0755",
-      "UID": "system",
-      "GID": "system",
-      "Optional": true
-    },
-    {
-      "Controller": "memory",
-      "Path": "/dev/memcg",
-      "Mode": "0700",
-      "UID": "root",
-      "GID": "system",
-      "Optional": true
-    }
-  ],
-  "Cgroups2": {
-    "Path": "/sys/fs/cgroup",
-    "Mode": "0775",
-    "UID": "system",
-    "GID": "system",
-    "Controllers": [
-      {
-        "Controller": "freezer",
-        "Path": "."
-      }
-    ]
-  }
-}
-EOF
 
 # 2. Setup D-Bus
 mkdir -p /run/dbus /etc/dbus-1/system.d
@@ -143,7 +93,92 @@ if [ ! -f /var/lib/waydroid/images/system.img ]; then
     echo "Waydroid initialized."
 fi
 
-# 6. Start Seatd for Wayland DRM/KMS session in non-VT mode
+# 6. Apply Container Compatibility Overlays
+if [ -f /var/lib/waydroid/images/system.img ]; then
+    echo "Applying Waydroid container compatibility patches..."
+    # Clean any legacy /etc directory that masked Android's /etc -> /system/etc symlink
+    rm -rf /var/lib/waydroid/overlay_rw/system/etc 2>/dev/null || true
+
+    mkdir -p /var/lib/waydroid/overlay_rw/system/system/etc/init/hw \
+             /var/lib/waydroid/overlay_rw/system/system/lib64 \
+             /var/lib/waydroid/overlay_rw/vendor/etc/init
+
+    # Install capability & priority shim library
+    if [ -f /usr/lib/libcap_shim.so ]; then
+        cp /usr/lib/libcap_shim.so /var/lib/waydroid/overlay_rw/system/system/lib64/libcap_shim.so
+        chmod 755 /var/lib/waydroid/overlay_rw/system/system/lib64/libcap_shim.so
+    fi
+
+    TMP_SYS=/tmp/wd_sys
+    mkdir -p "$TMP_SYS"
+    mount -o ro /var/lib/waydroid/images/system.img "$TMP_SYS" 2>/dev/null || true
+
+    if [ -d "$TMP_SYS/system" ]; then
+        # Patch cgroups.json: ensure missing controllers are marked Optional on cgroup v2
+        if [ -f "$TMP_SYS/system/etc/cgroups.json" ]; then
+            jq 'walk(if type == "object" and has("Controller") then . + {"Optional": "true"} else . end)' \
+                "$TMP_SYS/system/etc/cgroups.json" > /var/lib/waydroid/overlay_rw/system/system/etc/cgroups.json
+        fi
+
+        # Patch system rc files: comment out unsupported capabilities, critical flags, and rtprio limits
+        for f in "$TMP_SYS"/system/etc/init/*.rc; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            sed -e "s/^    capabilities /    # capabilities /g" \
+                -e "s/^    critical/# critical/g" \
+                -e "s/^    rlimit rtprio/# rlimit rtprio/g" \
+                "$f" > "/var/lib/waydroid/overlay_rw/system/system/etc/init/$base"
+        done
+
+        # Patch bpfloader.rc: disable reboot_on_failure and force bpf.progs_loaded
+        if [ -f /var/lib/waydroid/overlay_rw/system/system/etc/init/bpfloader.rc ]; then
+            sed -i -e "s/reboot_on_failure/# reboot_on_failure/g" \
+                   -e "/exec_start bpfloader/i \    setprop bpf.progs_loaded 1" \
+                   /var/lib/waydroid/overlay_rw/system/system/etc/init/bpfloader.rc
+        fi
+
+        # Patch logd.rc: preload libcap_shim.so
+        if [ -f /var/lib/waydroid/overlay_rw/system/system/etc/init/logd.rc ]; then
+            sed -i '/service logd \/system\/bin\/logd/a \    setenv LD_PRELOAD \/system\/lib64\/libcap_shim.so' \
+                /var/lib/waydroid/overlay_rw/system/system/etc/init/logd.rc
+        fi
+
+        # Patch zygote rc files: preload libcap_shim.so and clamp priority to 0
+        for f in "$TMP_SYS"/system/etc/init/hw/init.zygote*.rc; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            sed -e "s/priority -20/priority 0/g" \
+                -e "s/critical/# critical/g" \
+                "$f" > "/var/lib/waydroid/overlay_rw/system/system/etc/init/hw/$base"
+        done
+        if [ -f /var/lib/waydroid/overlay_rw/system/system/etc/init/hw/init.zygote64_32.rc ]; then
+            sed -i '/service zygote \/system\/bin\/app_process64/a \    setenv LD_PRELOAD \/system\/lib64\/libcap_shim.so' \
+                /var/lib/waydroid/overlay_rw/system/system/etc/init/hw/init.zygote64_32.rc
+        fi
+    fi
+
+    umount "$TMP_SYS" 2>/dev/null || true
+    rmdir "$TMP_SYS" 2>/dev/null || true
+
+    # Patch vendor rc files
+    if [ -f /var/lib/waydroid/images/vendor.img ]; then
+        TMP_VND=/tmp/wd_vnd
+        mkdir -p "$TMP_VND"
+        mount -o ro /var/lib/waydroid/images/vendor.img "$TMP_VND" 2>/dev/null || true
+        for f in "$TMP_VND"/etc/init/*.rc; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            sed -e "s/^    capabilities /    # capabilities /g" \
+                -e "s/^    critical/# critical/g" \
+                -e "s/^    rlimit rtprio/# rlimit rtprio/g" \
+                "$f" > "/var/lib/waydroid/overlay_rw/vendor/etc/init/$base"
+        done
+        umount "$TMP_VND" 2>/dev/null || true
+        rmdir "$TMP_VND" 2>/dev/null || true
+    fi
+fi
+
+# 7. Start Seatd for Wayland DRM/KMS session in non-VT mode
 rm -f /run/seatd.sock /run/seatd/seatd.sock
 mkdir -p /run/seatd
 
@@ -158,7 +193,7 @@ ln -sf /run/seatd.sock /run/seatd/seatd.sock 2>/dev/null || true
 export SEATD_SOCK=/run/seatd.sock
 export LIBSEAT_BACKEND=seatd
 
-# 7. Start Waydroid Container Service
+# 8. Start Waydroid Container Service
 echo "Starting Waydroid container service..."
 if [ -f /usr/lib/waydroid/data/scripts/waydroid-net.sh ]; then
     sed -i "s/dnsmasq \$LXC_DHCP_CONFILE_ARG/dnsmasq --port=0 --dhcp-option=6,1.1.1.1,8.8.8.8 \$LXC_DHCP_CONFILE_ARG/" /usr/lib/waydroid/data/scripts/waydroid-net.sh
@@ -169,11 +204,11 @@ CONTAINER_PID=$!
 
 sleep 3
 
-# 8. Start Waydroid Helper (Download & Install Kiosk Satellite, Grant Mic Permissions, Port Forward 2324)
+# 9. Start Waydroid Helper (Download & Install Kiosk Satellite, Grant Mic Permissions, Port Forward 2324)
 python3 /kiosk_helper.py &
 HELPER_PID=$!
 
-# 9. Start Cage Wayland Compositor running Waydroid Session
+# 10. Start Cage Wayland Compositor running Waydroid Session
 export XDG_RUNTIME_DIR=/run/user/0
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"

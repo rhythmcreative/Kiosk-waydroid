@@ -71,10 +71,11 @@ RUN mkdir -p /usr/share/keyrings \
     && sed -i "s|echo 1 > /proc/sys/net/ipv4/ip_forward|echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null \|\| true|" /usr/lib/waydroid/data/scripts/waydroid-net.sh \
     && rm -rf /var/lib/apt/lists/*
 
-# Compile root bypass library for Cage
-COPY libcage_root_bypass.c /
+# Compile root bypass library for Cage and capability shim for Waydroid
+COPY libcage_root_bypass.c libcap_shim.c /
 RUN gcc -shared -fPIC /libcage_root_bypass.c -o /usr/lib/libcage_root_bypass.so \
-    && rm -f /libcage_root_bypass.c
+    && gcc -shared -fPIC -nostdlib -O2 /libcap_shim.c -o /usr/lib/libcap_shim.so \
+    && rm -f /libcage_root_bypass.c /libcap_shim.c
 
 ARG BUILD_VERSION
 ENV ADDON_VERSION=${BUILD_VERSION}

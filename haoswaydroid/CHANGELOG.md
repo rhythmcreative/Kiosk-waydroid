@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.12
+- Fix: Resolved Android container reboot loop caused by bpfloader failure on Linux 6.12+ kernels by disabling `reboot_on_failure` and setting `bpf.progs_loaded 1`.
+- Fix: Introduced `libcap_shim.so` to stub missing container capabilities (`capset`, `cap_set_proc`, `cap_get_flag`) and process priority (`setpriority`), preventing aborts in `lmkd`, `logd`, `audioserver`, and `zygote`.
+- Fix: Resolved `EventHub` fatal abort in `system_server` ("Input must be able to block suspend") by mocking `cap_get_flag` for `CAP_BLOCK_SUSPEND` in `libcap_shim`.
+- Fix: Resolved `SecurityException` in `SystemServer.run()` caused by `Process.setThreadPriority` on container environments.
+- Fix: Clamped `zygote` priority to 0 and preloaded `libcap_shim.so` in 64-bit zygote init service.
+- Fix: Added full Linux capability bounding set to `privileged` in add-on `config.yaml`.
+- Fix: Automatic extraction and generation of compatibility overlays directly on container start.
+
 ## 1.0.11
 - Fix: Overlay Android `cgroups.json` with `Optional: true` for cgroup v2 compatibility, preventing Android `/init` crash on `SetupCgroups`.
 - Fix: Remount `/sys/fs/cgroup` and `/dev` as read-write.
