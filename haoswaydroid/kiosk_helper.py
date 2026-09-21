@@ -12,6 +12,7 @@ import sys
 import time
 import urllib.request
 import logging
+import re
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("kiosk_helper")
@@ -30,13 +31,16 @@ def load_options():
             logger.error(f"Failed to read options.json: {e}")
     return {}
 
-def run_cmd(cmd, check=False, shell=False):
+def run_cmd(cmd, check=False, shell=False, env=None):
     logger.debug(f"Running command: {cmd}")
     try:
+        exec_env = os.environ.copy()
+        if env:
+            exec_env.update(env)
         if isinstance(cmd, list) and not shell:
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=check)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=check, env=exec_env)
         else:
-            res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=check)
+            res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=check, env=exec_env)
         return res.returncode, res.stdout.strip(), res.stderr.strip()
     except Exception as e:
         logger.error(f"Command execution error ({cmd}): {e}")
@@ -260,6 +264,7 @@ def grant_permissions():
     logger.info("Granting Android permissions to Kiosk Satellite...")
     permissions = [
         "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.SYSTEM_ALERT_WINDOW",
@@ -284,6 +289,111 @@ def grant_permissions():
 
     # Disable battery optimization
     run_cmd(["waydroid", "shell", "dumpsys", "deviceidle", "whitelist", f"+{PACKAGE_NAME}"])
+
+def configure_pulseaudio_routing(options):
+    """Configure PulseAudio routing (HDMI output, Seeed mic input), eliminate VC4 crackle, and set volumes."""
+    pulse_env = {**os.environ, "PULSE_SERVER": "unix:/run/audio/pulse.sock"}
+
+    # 1. Ensure host and Android symlinks point to live /run/audio/pulse.sock
+    if os.path.exists("/run/audio/pulse.sock"):
+        try:
+            os.makedirs("/run/user/0/pulse", exist_ok=True)
+            for link_target in ["/run/user/0/pulse/native", "/run/audio/native"]:
+                if not os.path.islink(link_target) or os.readlink(link_target) != "/run/audio/pulse.sock":
+                    run_cmd(["ln", "-sf", "/run/audio/pulse.sock", link_target])
+        except Exception as e:
+            logger.debug(f"Host symlink setup notice: {e}")
+
+        # Ensure container has symlinks
+        run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c",
+                 "mkdir -p /run/xdg/pulse /run/user/0/pulse && "
+                 "ln -sf /run/audio/pulse.sock /run/xdg/pulse/native 2>/dev/null && "
+                 "ln -sf /run/audio/pulse.sock /run/user/0/pulse/native 2>/dev/null || true"])
+
+    # Test pactl connectivity
+    rc, _, _ = run_cmd(["pactl", "info"], env=pulse_env)
+    if rc != 0:
+        logger.warning("PulseAudio server not reachable via pactl yet.")
+        return False
+
+    logger.info("Configuring PulseAudio routing (HDMI output & Seeed microphone input)...")
+
+    # 2. Fix VC4 HDMI crackle / 'crrg' by reloading module-alsa-card with tsched=no
+    rc_c, cards_out, _ = run_cmd(["pactl", "list", "cards"], env=pulse_env)
+    if rc_c == 0 and ("vc4" in cards_out.lower() or "hdmi" in cards_out.lower()):
+        rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
+        if rc_m == 0:
+            modules = mods_out.split("Module #")
+            for mod in modules[1:]:
+                lines = mod.strip().split("\n")
+                mod_id = lines[0].strip()
+                mod_text = mod.lower()
+                if "module-alsa-card" in mod_text and ("vc4" in mod_text or "hdmi" in mod_text):
+                    if "tsched=no" not in mod_text and "tsched=0" not in mod_text:
+                        logger.info(f"VC4 HDMI module #{mod_id} has tsched enabled; reloading with tsched=no to eliminate crackle...")
+                        m = re.search(r'device_id="([^"]+)"', mod) or re.search(r'card_name="([^"]+)"', mod)
+                        dev_id = m.group(1) if m else "vc4-hdmi-0"
+                        run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
+                        time.sleep(0.5)
+                        run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={dev_id}", "tsched=no"], env=pulse_env)
+                        break
+
+    # 3. Set default sink to HDMI
+    rc_s, sinks_out, _ = run_cmd(["pactl", "list", "sinks", "short"], env=pulse_env)
+    if rc_s == 0:
+        hdmi_sinks = [
+            line.split()[1] for line in sinks_out.splitlines()
+            if len(line.split()) >= 2 and ("hdmi" in line.lower() or "vc4" in line.lower())
+        ]
+        if hdmi_sinks:
+            hdmi_sink = hdmi_sinks[0]
+            logger.info(f"Setting default audio sink to HDMI: {hdmi_sink}")
+            run_cmd(["pactl", "set-default-sink", hdmi_sink], env=pulse_env)
+            # Move active playback streams to HDMI sink
+            rc_si, si_out, _ = run_cmd(["pactl", "list", "sink-inputs", "short"], env=pulse_env)
+            if rc_si == 0 and si_out.strip():
+                for line in si_out.splitlines():
+                    parts = line.split()
+                    if parts:
+                        run_cmd(["pactl", "move-sink-input", parts[0], hdmi_sink], env=pulse_env)
+
+    # 4. Set default source to Seeed ReSpeaker / microphone
+    rc_src, sources_out, _ = run_cmd(["pactl", "list", "sources", "short"], env=pulse_env)
+    if rc_src == 0:
+        mic_sources = [
+            line.split()[1] for line in sources_out.splitlines()
+            if len(line.split()) >= 2 and any(k in line.lower() for k in ["seeed", "voice", "respeaker", "sound"]) and "monitor" not in line.lower()
+        ]
+        if mic_sources:
+            mic_source = mic_sources[0]
+            logger.info(f"Setting default audio source to microphone: {mic_source}")
+            run_cmd(["pactl", "set-default-source", mic_source], env=pulse_env)
+            # Move active recording streams to Seeed mic
+            rc_so, so_out, _ = run_cmd(["pactl", "list", "source-outputs", "short"], env=pulse_env)
+            if rc_so == 0 and so_out.strip():
+                for line in so_out.splitlines():
+                    parts = line.split()
+                    if parts:
+                        run_cmd(["pactl", "move-source-output", parts[0], mic_source], env=pulse_env)
+
+    # 5. Apply volume setting to PulseAudio and Android
+    vol = options.get("audio_volume", 100)
+    try:
+        run_cmd(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], env=pulse_env)
+        run_cmd(["pactl", "set-source-volume", "@DEFAULT_SOURCE@", "100%"], env=pulse_env)
+    except Exception as e:
+        logger.debug(f"Error setting pactl volume: {e}")
+
+    try:
+        level_15 = int(round((max(0, min(100, int(vol))) / 100.0) * 15))
+        for stream in [1, 2, 3, 4, 5]:
+            run_cmd(["waydroid", "shell", "-u", "2000", "--", "cmd", "media_session", "volume", "--stream", str(stream), "--set", str(level_15)])
+        run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "system", "volume_music_speaker", str(level_15)])
+        logger.info(f"Set Android media volume to {vol}% (level {level_15}/15)")
+    except Exception as e:
+        logger.debug(f"Error setting Android volume: {e}")
+
+    return True
 
 def setup_port_forwarding(options):
     remote_port = options.get("remote_admin_port", 2324)
@@ -354,6 +464,9 @@ def main():
     # Configure Android system settings
     provision_android()
 
+    # Configure PulseAudio routing (HDMI output, Seeed mic input), eliminate crackle & set volume
+    configure_pulseaudio_routing(options)
+
     # Install / Update Kiosk-Satellite APK (returns True if a fresh install happened)
     just_installed = ensure_kiosk_satellite_installed(options)
 
@@ -375,12 +488,41 @@ def main():
     else:
         logger.info("auto_launch_kiosk is disabled — skipping Kiosk Satellite launch.")
 
-    # Keep alive watchdog loop
+    # Keep alive watchdog loop & audio reconnect watchdog
     keep_alive = options.get("keep_alive", True)
-    if keep_alive and auto_launch:
-        logger.info("Watchdog loop started.")
-        while True:
-            time.sleep(10)
+    logger.info("Watchdog loop started (app keep-alive and audio monitor).")
+
+    last_sock_ino = None
+    try:
+        if os.path.exists("/run/audio/pulse.sock"):
+            last_sock_ino = os.stat("/run/audio/pulse.sock").st_ino
+    except Exception:
+        pass
+
+    while True:
+        time.sleep(10)
+
+        # Check PulseAudio socket inode for hassio_audio restart
+        try:
+            current_ino = None
+            if os.path.exists("/run/audio/pulse.sock"):
+                current_ino = os.stat("/run/audio/pulse.sock").st_ino
+
+            if current_ino is not None and current_ino != last_sock_ino:
+                logger.info(f"PulseAudio socket inode changed ({last_sock_ino} -> {current_ino}) - reconfiguring audio and restarting Android audio services...")
+                last_sock_ino = current_ino
+                configure_pulseaudio_routing(options)
+                # Restart Android audio HAL and audioserver to reconnect cleanly
+                run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c",
+                         "pkill -9 -f android.hardware.audio.service || true; pkill -9 -f audioserver || true"])
+            elif last_sock_ino is None and current_ino is not None:
+                last_sock_ino = current_ino
+                configure_pulseaudio_routing(options)
+        except Exception as e:
+            logger.debug(f"Audio watchdog check notice: {e}")
+
+        # Check Kiosk Satellite application state
+        if keep_alive and auto_launch:
             if not is_app_running():
                 logger.info(f"App {PACKAGE_NAME} not running, restarting...")
                 launch_app()

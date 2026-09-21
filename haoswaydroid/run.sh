@@ -2,11 +2,11 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.12}"
+echo " Version: ${ADDON_VERSION:-1.0.26}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
-mkdir -p /data/waydroid /data/waydroid_user /data/apk_cache /var/lib/waydroid /root/.local/share/waydroid
+mkdir -p /data/waydroid /data/waydroid_user /data/apk_cache /var/lib/waydroid /root/.local/share/waydroid /run/audio
 if [ ! -L /var/lib/waydroid ] && [ -d /data/waydroid ]; then
     mount --bind /data/waydroid /var/lib/waydroid 2>/dev/null || true
 fi
@@ -32,6 +32,22 @@ fi
 if [ -f /var/lib/waydroid/lxc/waydroid/config ]; then
     sed -i 's|lxc.hook.post-stop = /dev/null|lxc.hook.post-stop = /bin/true|' /var/lib/waydroid/lxc/waydroid/config 2>/dev/null || true
     sed -i 's|cgroup:ro|cgroup:rw|g' /var/lib/waydroid/lxc/waydroid/config 2>/dev/null || true
+fi
+
+# Mount /run/audio as a directory into LXC container so recreated PulseAudio sockets remain accessible
+add_lxc_mount() {
+    local file="$1"
+    local entry="$2"
+    if [ -f "$file" ] && ! grep -Fq "$entry" "$file"; then
+        echo "$entry" >> "$file"
+    fi
+}
+add_lxc_mount /usr/lib/waydroid/data/configs/config_base "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
+if [ -f /var/lib/waydroid/lxc/waydroid/config_base ]; then
+    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config_base "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
+fi
+if [ -f /var/lib/waydroid/lxc/waydroid/config ]; then
+    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
 fi
 
 # 2. Setup D-Bus
@@ -73,12 +89,13 @@ for node in binder vndbinder hwbinder; do
 done
 
 # 4. Setup Audio & Microphone (PulseAudio)
-mkdir -p /root/.config/pulse /run/user/0/pulse
+mkdir -p /root/.config/pulse /run/user/0/pulse /run/audio
 chmod 0700 /run/user/0 /run/user/0/pulse 2>/dev/null || true
 
 if [ -S /run/audio/pulse.sock ]; then
     export PULSE_SERVER="unix:/run/audio/pulse.sock"
     ln -sf /run/audio/pulse.sock /run/user/0/pulse/native 2>/dev/null || true
+    ln -sf /run/audio/pulse.sock /run/audio/native 2>/dev/null || true
     echo "Connected to HAOS PulseAudio socket at /run/audio/pulse.sock"
 elif [ -n "$PULSE_SERVER" ]; then
     echo "Using PULSE_SERVER=$PULSE_SERVER"
@@ -89,9 +106,38 @@ else
     fi
 fi
 
-if command -v pactl >/dev/null 2>&1; then
+if command -v pactl >/dev/null 2>&1 && [ -S /run/audio/pulse.sock ]; then
     echo "Audio server status:"
     pactl info 2>/dev/null || echo "PulseAudio daemon active."
+
+    # Prevent HDMI audio crackle / 'crrg' on Raspberry Pi 5 VC4 driver by disabling timer-based scheduling
+    hdmi_card=$(pactl list cards short 2>/dev/null | grep -i 'vc4.*hdmi' | awk '{print $1}' | head -n1)
+    if [ -n "$hdmi_card" ]; then
+        mod_info=$(pactl list modules 2>/dev/null | grep -B 2 -A 8 "card_index=$hdmi_card" || true)
+        if echo "$mod_info" | grep -q "module-alsa-card" && ! echo "$mod_info" | grep -q "tsched=0\|tsched=no"; then
+            mod_id=$(echo "$mod_info" | grep -o 'Module #[0-9]*' | head -n1 | cut -d'#' -f2)
+            if [ -n "$mod_id" ]; then
+                echo "Reloading VC4 HDMI module #$mod_id with tsched=no..."
+                card_name=$(pactl list cards 2>/dev/null | grep -A 5 "Card #$hdmi_card" | grep "Name:" | awk '{print $2}')
+                pactl unload-module "$mod_id" 2>/dev/null || true
+                pactl load-module module-alsa-card device_id="${card_name:-vc4-hdmi-0}" tsched=no 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # Set default audio sink to HDMI if available
+    hdmi_sink=$(pactl list sinks short 2>/dev/null | grep -i 'hdmi' | awk '{print $2}' | head -n1)
+    if [ -n "$hdmi_sink" ]; then
+        echo "Setting default audio sink to HDMI: $hdmi_sink"
+        pactl set-default-sink "$hdmi_sink" 2>/dev/null || true
+    fi
+
+    # Set default audio source to Seeed ReSpeaker / microphone if available
+    seeed_source=$(pactl list sources short 2>/dev/null | grep -i 'seeed\|respeaker\|voice\|sound' | grep -v 'monitor' | awk '{print $2}' | head -n1)
+    if [ -n "$seeed_source" ]; then
+        echo "Setting default audio source to microphone: $seeed_source"
+        pactl set-default-source "$seeed_source" 2>/dev/null || true
+    fi
 fi
 
 # 5. Initialize Waydroid if not already initialized
@@ -265,6 +311,8 @@ waydroid prop set ro.hardware.gralloc gbm 2>/dev/null || true
 waydroid prop set ro.hardware.egl mesa 2>/dev/null || true
 waydroid prop set debug.stagefright.ccodec 0 2>/dev/null || true
 waydroid prop set persist.waydroid.fake_touch true 2>/dev/null || true
+waydroid prop set waydroid.pulse_runtime_path /run/audio 2>/dev/null || true
+waydroid prop set persist.waydroid.pulse_runtime_path /run/audio 2>/dev/null || true
 
 waydroid container start &
 CONTAINER_PID=$!

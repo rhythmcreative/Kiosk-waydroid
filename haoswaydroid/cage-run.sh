@@ -26,6 +26,7 @@ for i in $(seq 1 120); do
         echo "Android boot completed!"
         waydroid shell -u 0 /system/bin/sh -c "mount -o remount,rw /sys/fs/cgroup 2>/dev/null; echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || true" 2>/dev/null || true
         waydroid shell -u 0 /system/bin/sh -c "if ! pidof lmkd >/dev/null 2>&1; then /system/bin/lmkd & fi" 2>/dev/null || true
+        waydroid shell -u 0 /system/bin/sh -c "mkdir -p /run/xdg/pulse /run/user/0/pulse; ln -sf /run/audio/pulse.sock /run/xdg/pulse/native 2>/dev/null; ln -sf /run/audio/pulse.sock /run/user/0/pulse/native 2>/dev/null || true" 2>/dev/null || true
         sleep 2
         echo "Activating Waydroid Full UI in Cage..."
         waydroid show-full-ui &

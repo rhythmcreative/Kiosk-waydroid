@@ -1,6 +1,36 @@
 # Changelog
 
-## 1.0.17
+## 1.0.26
+- Fix: Eliminate Raspberry Pi 5 HDMI audio crackling, popping, and buffer underruns ("crrg") by automatically detecting Broadcom `vc4-hdmi` and reloading `module-alsa-card` with `tsched=no` (interrupt-driven scheduling).
+- Fix: Bind mount `/run/audio` as a directory in LXC container configuration so Android PulseAudio clients survive `hassio_audio` restarts without stale socket inode disconnects.
+- Fix: Add PulseAudio watchdog in `kiosk_helper.py` that monitors socket inode changes, re-establishes native symlinks, and automatically restarts Android audio services (`android.hardware.audio.service`, `audioserver`).
+- Fix: Automatically configure default audio routing to HDMI output for playback/TTS and Seeed Voicecard / ReSpeaker Pi HAT for microphone input.
+- Feature: Apply `audio_volume` configuration option to both host PulseAudio sink and Android internal media/system streams.
+- Fix: Grant `android.permission.MODIFY_AUDIO_SETTINGS` to Kiosk Satellite on installation.
+
+## 1.0.25
+- Feature: Persist Android user data across reboots (`/root/.local/share/waydroid`).
+
+## 1.0.24
+- Fix: Preserve Kiosk Satellite settings on APK updates using `pm install -r`.
+
+## 1.0.23
+- Fix: Fix APK reinstall on every boot — preserve Kiosk Satellite settings across restarts.
+
+## 1.0.22
+- Feature: Add `auto_launch_kiosk` option to control Kiosk Satellite auto-start.
+
+## 1.0.21
+- Fix: Preserve nft in waydroid-net, add ip rule lookup main, and DNS redirect.
+
+## 1.0.20
+- Fix: Add default gateway, DNS, and host iptables NAT for Waydroid.
+
+## 1.0.19
+- Fix: Launch app using shell uid 2000.
+
+## 1.0.18
+- Fix: Add dummy_lmkd daemon to resolve system_server ANR hang and fix cage ui timing.
 - Fix: Comment out `capabilities` in system/vendor rc files to prevent Android `init` from aborting `logd` with status 6 on unsupported capability sets.
 - Fix: Launch `waydroid show-full-ui &` immediately in `cage-run.sh` to eliminate the black screen delay during boot.
 
