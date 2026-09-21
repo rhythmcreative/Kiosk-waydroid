@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.27
+- Fix: Eliminate robotic / metallic voice distortion and stuttering on Raspberry Pi 5 HDMI audio by tuning PulseAudio buffer fragments (`fragments=8 fragment_size=8192`, 64KB total buffer / ~370ms latency buffer) to prevent `vc4` driver interrupt spin loops (`POLLOUT` without available data).
+
 ## 1.0.26
 - Fix: Eliminate Raspberry Pi 5 HDMI audio crackling, popping, and buffer underruns ("crrg") by automatically detecting Broadcom `vc4-hdmi` and reloading `module-alsa-card` with `tsched=no` (interrupt-driven scheduling).
 - Fix: Bind mount `/run/audio` as a directory in LXC container configuration so Android PulseAudio clients survive `hassio_audio` restarts without stale socket inode disconnects.

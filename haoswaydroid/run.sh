@@ -110,17 +110,19 @@ if command -v pactl >/dev/null 2>&1 && [ -S /run/audio/pulse.sock ]; then
     echo "Audio server status:"
     pactl info 2>/dev/null || echo "PulseAudio daemon active."
 
-    # Prevent HDMI audio crackle / 'crrg' on Raspberry Pi 5 VC4 driver by disabling timer-based scheduling
-    hdmi_card=$(pactl list cards short 2>/dev/null | grep -i 'vc4.*hdmi' | awk '{print $1}' | head -n1)
+    # Prevent HDMI audio crackle / 'crrg' and robotic distortion on Raspberry Pi 5 VC4 driver
+    # by using interrupt-based scheduling with tuned buffer fragments (tsched=no fragments=8 fragment_size=8192)
+    hdmi_card=$(pactl list cards short 2>/dev/null | grep -i 'vc4.*hdmi\|hdmi' | awk '{print $1}' | head -n1)
     if [ -n "$hdmi_card" ]; then
         mod_info=$(pactl list modules 2>/dev/null | grep -B 2 -A 8 "card_index=$hdmi_card" || true)
-        if echo "$mod_info" | grep -q "module-alsa-card" && ! echo "$mod_info" | grep -q "tsched=0\|tsched=no"; then
+        if echo "$mod_info" | grep -q "module-alsa-card" && { ! echo "$mod_info" | grep -q "tsched=0\|tsched=no" || ! echo "$mod_info" | grep -q "fragments=8"; }; then
             mod_id=$(echo "$mod_info" | grep -o 'Module #[0-9]*' | head -n1 | cut -d'#' -f2)
             if [ -n "$mod_id" ]; then
-                echo "Reloading VC4 HDMI module #$mod_id with tsched=no..."
+                echo "Reloading VC4 HDMI module #$mod_id with tsched=no fragments=8 fragment_size=8192..."
                 card_name=$(pactl list cards 2>/dev/null | grep -A 5 "Card #$hdmi_card" | grep "Name:" | awk '{print $2}')
                 pactl unload-module "$mod_id" 2>/dev/null || true
-                pactl load-module module-alsa-card device_id="${card_name:-vc4-hdmi-0}" tsched=no 2>/dev/null || true
+                sleep 0.5
+                pactl load-module module-alsa-card device_id="${card_name:-vc4-hdmi-0}" tsched=no fragments=8 fragment_size=8192 2>/dev/null || true
             fi
         fi
     fi

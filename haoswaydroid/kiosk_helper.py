@@ -318,7 +318,7 @@ def configure_pulseaudio_routing(options):
 
     logger.info("Configuring PulseAudio routing (HDMI output & Seeed microphone input)...")
 
-    # 2. Fix VC4 HDMI crackle / 'crrg' by reloading module-alsa-card with tsched=no
+    # 2. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with tsched=no and tuned buffer fragments
     rc_c, cards_out, _ = run_cmd(["pactl", "list", "cards"], env=pulse_env)
     if rc_c == 0 and ("vc4" in cards_out.lower() or "hdmi" in cards_out.lower()):
         rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
@@ -329,13 +329,14 @@ def configure_pulseaudio_routing(options):
                 mod_id = lines[0].strip()
                 mod_text = mod.lower()
                 if "module-alsa-card" in mod_text and ("vc4" in mod_text or "hdmi" in mod_text):
-                    if "tsched=no" not in mod_text and "tsched=0" not in mod_text:
-                        logger.info(f"VC4 HDMI module #{mod_id} has tsched enabled; reloading with tsched=no to eliminate crackle...")
+                    needs_reload = ("tsched=no" not in mod_text and "tsched=0" not in mod_text) or ("fragments=8" not in mod_text)
+                    if needs_reload:
+                        logger.info(f"VC4 HDMI module #{mod_id} needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192...")
                         m = re.search(r'device_id="([^"]+)"', mod) or re.search(r'card_name="([^"]+)"', mod)
                         dev_id = m.group(1) if m else "vc4-hdmi-0"
                         run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
                         time.sleep(0.5)
-                        run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={dev_id}", "tsched=no"], env=pulse_env)
+                        run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={dev_id}", "tsched=no", "fragments=8", "fragment_size=8192"], env=pulse_env)
                         break
 
     # 3. Set default sink to HDMI
