@@ -329,14 +329,14 @@ def configure_pulseaudio_routing(options):
                 mod_id = lines[0].strip()
                 mod_text = mod.lower()
                 if "module-alsa-card" in mod_text and ("vc4" in mod_text or "hdmi" in mod_text):
-                    needs_reload = ("tsched=no" not in mod_text and "tsched=0" not in mod_text) or ("fragments=8" not in mod_text) or ("rate=48000" not in mod_text)
+                    needs_reload = ("tsched=no" not in mod_text and "tsched=0" not in mod_text) or ("fragments=8" not in mod_text)
                     if needs_reload:
-                        logger.info(f"VC4 HDMI module #{mod_id} needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192 rate=48000...")
+                        logger.info(f"VC4 HDMI module #{mod_id} needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192...")
                         m = re.search(r'device_id="([^"]+)"', mod) or re.search(r'card_name="([^"]+)"', mod)
                         dev_id = m.group(1) if m else "vc4-hdmi-0"
                         run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
                         time.sleep(0.5)
-                        run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={dev_id}", "tsched=no", "fragments=8", "fragment_size=8192", "rate=48000"], env=pulse_env)
+                        run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={dev_id}", "tsched=no", "fragments=8", "fragment_size=8192"], env=pulse_env)
                         break
 
     # 3. Set default sink to HDMI
