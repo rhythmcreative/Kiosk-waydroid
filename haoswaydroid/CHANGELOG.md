@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.28
+- Fix: Enforce native 48000 Hz sample rate (`rate=48000`) on Raspberry Pi 5 VC4 HDMI audio sink to match hardware CEA-861 clock regeneration and eliminate resampler jitter/phase distortion.
+- Fix: Set default `audio_volume` to 80% to avoid speaker amplifier clipping and distortion on compact HDMI displays (e.g. MPI7002 7-inch LCDs).
+
 ## 1.0.27
 - Fix: Eliminate robotic / metallic voice distortion and stuttering on Raspberry Pi 5 HDMI audio by tuning PulseAudio buffer fragments (`fragments=8 fragment_size=8192`, 64KB total buffer / ~370ms latency buffer) to prevent `vc4` driver interrupt spin loops (`POLLOUT` without available data).
 
