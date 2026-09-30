@@ -283,110 +283,219 @@ def grant_permissions():
     ]
     for perm in permissions:
         run_cmd(["waydroid", "shell", "pm", "grant", PACKAGE_NAME, perm])
-    
+
     # Grant appops for alert window
     run_cmd(["waydroid", "shell", "appops", "set", PACKAGE_NAME, "SYSTEM_ALERT_WINDOW", "allow"])
+
+    # Hidden-but-required appop for microphone capture. Without this entry
+    # RECORD_AUDIO can be granted while capture is still silently refused,
+    # which presents as "the microphone does not work" with no error anywhere.
+    run_cmd(["waydroid", "shell", "appops", "set", PACKAGE_NAME, "RECORD_AUDIO", "allow"])
+
+    # Make VOICE_COMMUNICATION the preferred capture profile. Android routes
+    # AndroidMediaRecorder to VOICE_COMMUNICATION by default, which engages the
+    # audio stack's voice-processing chain; on this container it can land on a
+    # profile with no working source. MUSIC is the plain, unprocessed path.
+    run_cmd(["waydroid", "shell", "-u", "0", "--", "settings", "put", "global", "voice_recognition_source", "default"])
 
     # Disable battery optimization
     run_cmd(["waydroid", "shell", "dumpsys", "deviceidle", "whitelist", f"+{PACKAGE_NAME}"])
 
-def configure_pulseaudio_routing(options):
-    """Configure PulseAudio routing (HDMI output, Seeed mic input), eliminate VC4 crackle, and set volumes."""
-    pulse_env = {**os.environ, "PULSE_SERVER": "unix:/run/audio/pulse.sock"}
 
-    # 1. Ensure host and Android symlinks point to live /run/audio/pulse.sock
-    if os.path.exists("/run/audio/pulse.sock"):
+def verify_mic_permission():
+    """Re-grant microphone access if Android revoked it.
+
+    Android auto-resets permissions for apps it considers unused. Because
+    permissions were only ever granted on a fresh install, a single auto-reset
+    permanently killed the microphone with nothing in the log to explain it.
+    """
+    rc, out, _ = run_cmd(["waydroid", "shell", "dumpsys", "package", PACKAGE_NAME])
+    if rc != 0 or PACKAGE_NAME not in out:
+        return True
+    granted = "android.permission.RECORD_AUDIO: granted=true" in out
+    if not granted:
+        logger.warning("RECORD_AUDIO is no longer granted - re-granting microphone access.")
+        grant_permissions()
+    return granted
+
+
+def android_audio_fallback():
+    """Last-resort path: drive ALSA directly from inside Android.
+
+    Only triggers when the PulseAudio socket is genuinely not reachable from
+    inside the container. It is possible at all because the add-on now
+    rbind-mounts /dev/snd and /proc/asound into the LXC container. On a normal
+    boot this is a no-op.
+    """
+    rc, out, _ = run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c",
+                          "test -S /run/audio/pulse.sock && echo PULSE_OK || echo PULSE_MISSING"])
+    if rc == 0 and "PULSE_OK" in out:
+        return False
+
+    logger.warning("PulseAudio socket not reachable inside Android - trying ALSA fallback.")
+
+    # Enumerate capture devices from /proc/asound (bind-mounted into the
+    # container by run.sh). More reliable than relying on arecord being
+    # present in the Android toybox build.
+    dev = None
+    rc, caps, _ = run_cmd(["waydroid", "shell", "-u", "0", "--", "cat", "/proc/asound/pcm"])
+    if rc == 0:
+        for line in caps.splitlines():
+            if "capture" not in line.lower():
+                continue
+            m = re.match(r"\s*(\d+)-(\d+):", line)
+            if m:
+                dev = m.group(2)
+                logger.info(f"ALSA fallback capture device: card {m.group(1)}, device {dev}")
+                break
+    if dev is None:
+        logger.error("ALSA fallback found no capture device. Microphone unavailable.")
+        return False
+
+    logger.warning(f"Using ALSA fallback inside Android: card 0 device {dev} @ 48000 Hz.")
+    settings = [
+        ("ro.hardware.audio.primary", "0"),
+        ("ro.hardware.audio.card", dev),
+        ("ro.hardware.audio.device", "0"),
+        ("ro.hardware.audio.in_device", "0"),
+        ("ro.hardware.audio.out_device", "0"),
+        ("ro.hardware.audio.sample_rate", "48000"),
+        ("ro.hardware.audio.out_sample_rate", "48000"),
+        ("ro.hardware.audio.in_sample_rate", "48000"),
+        ("ro.hardware.audio.out_channels", "2"),
+        ("ro.hardware.audio.in_channels", "1"),
+        ("ro.hardware.audio.channels", "1"),
+    ]
+    for prop, val in settings:
+        run_cmd(["waydroid", "shell", "-u", "0", "--", "setprop", prop, val])
+    return True
+
+def find_hdmi_sink(pulse_env):
+    """Return the first HDMI sink name, or None."""
+    rc, out, _ = run_cmd(["pactl", "list", "sinks", "short"], env=pulse_env)
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and ("hdmi" in line.lower() or "vc4" in line.lower()):
+            return parts[1]
+    return None
+
+
+def find_capture_source(pulse_env):
+    """Pick the microphone source precisely.
+
+    The previous implementation matched on a broad substring list including
+    "sound", which could latch onto an unrelated card. Here we simply prefer
+    any real capture (non-monitor) source and take the lowest-indexed one,
+    which is deterministic and never picks a sink monitor by accident.
+    """
+    rc, out, _ = run_cmd(["pactl", "list", "sources", "short"], env=pulse_env)
+    if rc != 0:
+        return None
+    real = []
+    monitors = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        (monitors if "monitor" in parts[1].lower() else real).append(parts[1])
+    if real:
+        return real[0]
+    if monitors:
+        return monitors[0]
+    return None
+
+
+def configure_pulseaudio_routing(options):
+    """Route HDMI output + microphone input through the shared HAOS server.
+
+    This function never unloads or reloads PulseAudio modules. The server is
+    shared with Home Assistant, so tearing down module-alsa-card also kills
+    HA's own live streams.
+    """
+    pulse_env = {**os.environ, "PULSE_SERVER": "unix:/run/audio/pulse.sock"}
+    sock = "/run/audio/pulse.sock"
+
+    # 1. Make sure the host-side symlinks point at the live socket.
+    if os.path.exists(sock):
         try:
             os.makedirs("/run/user/0/pulse", exist_ok=True)
-            for link_target in ["/run/user/0/pulse/native", "/run/audio/native"]:
-                if not os.path.islink(link_target) or os.readlink(link_target) != "/run/audio/pulse.sock":
-                    run_cmd(["ln", "-sf", "/run/audio/pulse.sock", link_target])
+            os.makedirs("/run/audio", exist_ok=True)
+            for link in ["/run/audio/native", "/run/user/0/pulse/native"]:
+                if not os.path.islink(link) or os.readlink(link) != sock:
+                    run_cmd(["ln", "-sf", sock, link])
         except Exception as e:
             logger.debug(f"Host symlink setup notice: {e}")
 
-        # Ensure container has symlinks
-        run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c",
-                 "mkdir -p /run/xdg/pulse /run/user/0/pulse && "
-                 "ln -sf /run/audio/pulse.sock /run/xdg/pulse/native 2>/dev/null && "
-                 "ln -sf /run/audio/pulse.sock /run/user/0/pulse/native 2>/dev/null || true"])
+    # 2. Container side. Waydroid bind-mounts
+    #    <PULSE_RUNTIME_PATH>/native -> /run/xdg/pulse/native itself, so this
+    #    is normally already in place. Only create it when genuinely missing:
+    #    /run/xdg/pulse/native is a live bind mount point, and ln -f against
+    #    one fails with EBUSY (the old code clobbered it on every boot).
+    run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c",
+             "mkdir -p /run/xdg/pulse /run/user/0/pulse; "
+             "test -S /run/xdg/pulse/native || ln -sf /run/audio/pulse.sock /run/xdg/pulse/native || true; "
+             "test -S /run/user/0/pulse/native || ln -sf /run/audio/pulse.sock /run/user/0/pulse/native || true; "
+             "true"])
 
-    # Test pactl connectivity
+    # 3. Verify the server is actually reachable before doing anything else.
     rc, _, _ = run_cmd(["pactl", "info"], env=pulse_env)
     if rc != 0:
         logger.warning("PulseAudio server not reachable via pactl yet.")
         return False
 
-    logger.info("Configuring PulseAudio routing (HDMI output & Seeed microphone input)...")
+    logger.info("Configuring PulseAudio routing (HDMI output & microphone input)...")
 
-    # 2. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with tsched=no and tuned buffer fragments
-    rc_c, cards_out, _ = run_cmd(["pactl", "list", "cards"], env=pulse_env)
-    if rc_c == 0 and ("vc4" in cards_out.lower() or "hdmi" in cards_out.lower()):
-        rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
-        if rc_m == 0:
-            modules = mods_out.split("Module #")
-            for mod in modules[1:]:
-                lines = mod.strip().split("\n")
-                mod_id = lines[0].strip()
-                mod_text = mod.lower()
-                if "module-alsa-card" in mod_text and ("vc4" in mod_text or "hdmi" in mod_text):
-                    needs_reload = ("tsched=no" not in mod_text and "tsched=0" not in mod_text) or ("fragments=8" not in mod_text)
-                    if needs_reload:
-                        logger.info(f"VC4 HDMI module #{mod_id} needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192...")
-                        m = re.search(r'device_id="([^"]+)"', mod) or re.search(r'card_name="([^"]+)"', mod)
-                        dev_id = m.group(1) if m else "vc4-hdmi-0"
-                        run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
-                        time.sleep(0.5)
-                        run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={dev_id}", "tsched=no", "fragments=8", "fragment_size=8192"], env=pulse_env)
-                        break
+    # 4. Reduce per-stream fragmentation so the resampler has slack under load.
+    #    Cheap and fully reversible: unlike reloading module-alsa-card it does
+    #    not interrupt anything that is already playing.
+    run_cmd(["pactl", "set-default-fragments", "4"], env=pulse_env)
 
-    # 3. Set default sink to HDMI
-    rc_s, sinks_out, _ = run_cmd(["pactl", "list", "sinks", "short"], env=pulse_env)
-    if rc_s == 0:
-        hdmi_sinks = [
-            line.split()[1] for line in sinks_out.splitlines()
-            if len(line.split()) >= 2 and ("hdmi" in line.lower() or "vc4" in line.lower())
-        ]
-        if hdmi_sinks:
-            hdmi_sink = hdmi_sinks[0]
-            logger.info(f"Setting default audio sink to HDMI: {hdmi_sink}")
-            run_cmd(["pactl", "set-default-sink", hdmi_sink], env=pulse_env)
-            # Move active playback streams to HDMI sink
-            rc_si, si_out, _ = run_cmd(["pactl", "list", "sink-inputs", "short"], env=pulse_env)
-            if rc_si == 0 and si_out.strip():
-                for line in si_out.splitlines():
-                    parts = line.split()
-                    if parts:
-                        run_cmd(["pactl", "move-sink-input", parts[0], hdmi_sink], env=pulse_env)
+    # 5. Default sink -> HDMI.
+    hdmi_sink = find_hdmi_sink(pulse_env)
+    if hdmi_sink:
+        logger.info(f"Setting default audio sink to HDMI: {hdmi_sink}")
+        run_cmd(["pactl", "set-default-sink", hdmi_sink], env=pulse_env)
+        rc_si, si_out, _ = run_cmd(["pactl", "list", "sink-inputs", "short"], env=pulse_env)
+        if rc_si == 0 and si_out.strip():
+            for line in si_out.splitlines():
+                parts = line.split()
+                if parts:
+                    run_cmd(["pactl", "move-sink-input", parts[0], hdmi_sink], env=pulse_env)
+    else:
+        logger.warning("No HDMI sink found on the PulseAudio server.")
 
-    # 4. Set default source to Seeed ReSpeaker / microphone
-    rc_src, sources_out, _ = run_cmd(["pactl", "list", "sources", "short"], env=pulse_env)
-    if rc_src == 0:
-        mic_sources = [
-            line.split()[1] for line in sources_out.splitlines()
-            if len(line.split()) >= 2 and any(k in line.lower() for k in ["seeed", "voice", "respeaker", "sound"]) and "monitor" not in line.lower()
-        ]
-        if mic_sources:
-            mic_source = mic_sources[0]
-            logger.info(f"Setting default audio source to microphone: {mic_source}")
-            run_cmd(["pactl", "set-default-source", mic_source], env=pulse_env)
-            # Move active recording streams to Seeed mic
-            rc_so, so_out, _ = run_cmd(["pactl", "list", "source-outputs", "short"], env=pulse_env)
-            if rc_so == 0 and so_out.strip():
-                for line in so_out.splitlines():
-                    parts = line.split()
-                    if parts:
-                        run_cmd(["pactl", "move-source-output", parts[0], mic_source], env=pulse_env)
+    # 6. Default source -> microphone.
+    mic_source = find_capture_source(pulse_env)
+    if mic_source:
+        logger.info(f"Setting default audio source to microphone: {mic_source}")
+        run_cmd(["pactl", "set-default-source", mic_source], env=pulse_env)
+        rc_so, so_out, _ = run_cmd(["pactl", "list", "source-outputs", "short"], env=pulse_env)
+        if rc_so == 0 and so_out.strip():
+            for line in so_out.splitlines():
+                parts = line.split()
+                if parts:
+                    run_cmd(["pactl", "move-source-output", parts[0], mic_source], env=pulse_env)
+    else:
+        logger.warning("No capture source found on the PulseAudio server - microphone will not work.")
 
-    # 5. Apply volume setting to PulseAudio and Android
-    vol = options.get("audio_volume", 100)
+    # 7. Volumes.
     try:
-        run_cmd(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], env=pulse_env)
-        run_cmd(["pactl", "set-source-volume", "@DEFAULT_SOURCE@", "100%"], env=pulse_env)
-    except Exception as e:
-        logger.debug(f"Error setting pactl volume: {e}")
+        vol = max(0, min(100, int(options.get("audio_volume", 100))))
+    except Exception:
+        vol = 100
+    try:
+        mic_vol = max(0, min(100, int(options.get("mic_volume", 70))))
+    except Exception:
+        mic_vol = 70
+    run_cmd(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], env=pulse_env)
+    # The ReSpeaker array clips at 100%. Backing the capture gain off gives the
+    # wake-word/STT pipeline usable headroom instead of a distorted signal.
+    run_cmd(["pactl", "set-source-volume", "@DEFAULT_SOURCE@", f"{mic_vol}%"], env=pulse_env)
 
     try:
-        level_15 = int(round((max(0, min(100, int(vol))) / 100.0) * 15))
+        level_15 = int(round((vol / 100.0) * 15))
         for stream in [1, 2, 3, 4, 5]:
             run_cmd(["waydroid", "shell", "-u", "2000", "--", "cmd", "media_session", "volume", "--stream", str(stream), "--set", str(level_15)])
         run_cmd(["waydroid", "shell", "-u", "2000", "--", "settings", "put", "system", "volume_music_speaker", str(level_15)])
@@ -447,11 +556,11 @@ def launch_app():
     run_cmd(["waydroid", "app", "launch", PACKAGE_NAME])
 
 def is_app_running():
+    # pidof only. The previous "dumpsys window" fallback dumps the entire
+    # window-manager state over LXC+ADB, which is expensive enough to starve
+    # the audio threads of CPU on a Raspberry Pi.
     rc, out, _ = run_cmd(["waydroid", "shell", "pidof", PACKAGE_NAME])
-    if rc == 0 and bool(out.strip()):
-        return True
-    rc, out, _ = run_cmd(["waydroid", "shell", "dumpsys", "window"])
-    return PACKAGE_NAME in out
+    return rc == 0 and bool(out.strip())
 
 def main():
     options = load_options()
@@ -465,8 +574,12 @@ def main():
     # Configure Android system settings
     provision_android()
 
-    # Configure PulseAudio routing (HDMI output, Seeed mic input), eliminate crackle & set volume
+    # Configure PulseAudio routing (HDMI output & microphone input)
     configure_pulseaudio_routing(options)
+
+    # If the shared PulseAudio socket turned out to be unreachable from inside
+    # the container, fall back to talking to ALSA directly.
+    android_audio_fallback()
 
     # Install / Update Kiosk-Satellite APK (returns True if a fresh install happened)
     just_installed = ensure_kiosk_satellite_installed(options)
@@ -494,36 +607,70 @@ def main():
     logger.info("Watchdog loop started (app keep-alive and audio monitor).")
 
     last_sock_ino = None
+    last_audio_retry = 0
+    last_perm_check = 0
+    last_app_check = 0
     try:
         if os.path.exists("/run/audio/pulse.sock"):
             last_sock_ino = os.stat("/run/audio/pulse.sock").st_ino
     except Exception:
         pass
 
+    loop = 0
     while True:
-        time.sleep(10)
+        time.sleep(5)
+        loop += 1
 
-        # Check PulseAudio socket inode for hassio_audio restart
+        # Cheap, every cycle: did the shared PulseAudio socket get recreated?
+        # The supervisor restarts hassio_audio periodically, which replaces the
+        # socket inode. PulseAudio clients reconnect on their own, so the correct
+        # response is to re-assert routing - NOT to kill Android's audioserver.
+        # The old code SIGKILLed audioserver here, producing a guaranteed audio
+        # gap (and a dead mic) on every single socket recreation.
         try:
             current_ino = None
             if os.path.exists("/run/audio/pulse.sock"):
                 current_ino = os.stat("/run/audio/pulse.sock").st_ino
 
             if current_ino is not None and current_ino != last_sock_ino:
-                logger.info(f"PulseAudio socket inode changed ({last_sock_ino} -> {current_ino}) - reconfiguring audio and restarting Android audio services...")
+                logger.info(f"PulseAudio socket recreated ({last_sock_ino} -> {current_ino}); re-asserting routing.")
                 last_sock_ino = current_ino
                 configure_pulseaudio_routing(options)
-                # Restart Android audio HAL and audioserver to reconnect cleanly
-                run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c",
-                         "pkill -9 -f android.hardware.audio.service || true; pkill -9 -f audioserver || true"])
+                # Give Android's audio HAL a bounded number of chances to
+                # reconnect, then escalate to a real restart instead of an
+                # unconditional SIGKILL on every single event.
+                last_audio_retry = 0
             elif last_sock_ino is None and current_ino is not None:
                 last_sock_ino = current_ino
                 configure_pulseaudio_routing(options)
         except Exception as e:
-            logger.debug(f"Audio watchdog check notice: {e}")
+            logger.debug(f"Audio socket check notice: {e}")
 
-        # Check Kiosk Satellite application state
-        if keep_alive and auto_launch:
+        # Android audio health: only if the socket actually changed.
+        if last_audio_retry and time.time() - last_audio_retry > 60:
+            last_audio_retry = 0
+            logger.warning("Android audio services not responding after a PulseAudio reconnect; restarting them.")
+            # pidof, not pkill -f: the pattern form can match this command's own
+            # command line inside the container shell.
+            for proc in ("audioserver", "android.hardware.audio.service"):
+                rc, pid, _ = run_cmd(["waydroid", "shell", "-u", "0", "--", "pidof", proc])
+                for p in pid.split():
+                    run_cmd(["waydroid", "shell", "-u", "0", "--", "kill", "-9", p])
+
+        # Microphone permission watchdog (every ~10 min). Cheap enough and it
+        # prevents a silent, permanent microphone failure.
+        if time.time() - last_perm_check > 600:
+            last_perm_check = time.time()
+            try:
+                verify_mic_permission()
+            except Exception as e:
+                logger.debug(f"Permission check notice: {e}")
+
+        # App keep-alive. Uses pidof only (the old code fell back to
+        # "dumpsys window", which is very expensive over LXC+ADB and starved
+        # the audio threads of CPU on an already-loaded device).
+        if keep_alive and auto_launch and time.time() - last_app_check > 15:
+            last_app_check = time.time()
             if not is_app_running():
                 logger.info(f"App {PACKAGE_NAME} not running, restarting...")
                 launch_app()

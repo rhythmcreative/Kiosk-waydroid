@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.29
+- Fix: **Remove the `module-alsa-card` unload/reload cycle.** It was tearing down the sink and every live stream on the *shared* HAOS PulseAudio server (including Home Assistant's own TTS). Stability is now achieved without touching a live module.
+- Fix: **Correct the buffer-size miscalculation that caused the choppy audio.** `fragment_size` is expressed in *frames*, not bytes: `8192 frames x 2ch x 2 bytes = 32 KB` per fragment, so `fragments=8` requested a **256 KB / ~1.365 s** buffer at 48 kHz, not the "64 KB / ~370 ms" recorded in 1.0.27. Combined with `tsched=no` (which disables the ALSA timer scheduler) this produced the very crackling and latency it was intended to cure.
+- Fix: **Stop `SIGKILL`ing Android's `audioserver` on every PulseAudio socket inode change.** The supervisor recreates `/run/audio/pulse.sock` whenever `hassio_audio` restarts, so playback was being cut and the microphone killed periodically. Clients now reconnect on their own; the audio HAL is only restarted after a bounded grace period if it fails to recover.
+- Fix: **Set `PULSE_RUNTIME_PATH` correctly.** Waydroid reads this *environment variable* (`tools/config/__init__.py`), not an Android system property. The previous `waydroid prop set waydroid.pulse_runtime_path` calls were dead code, so the container silently fell back to binding `/run/user/0/pulse/native`.
+- Fix: **Bind-mount `/dev/snd` and `/proc/asound` into the LXC container** so Android's audio HAL has a real ALSA codec (HDMI playback, ReSpeaker capture) to attach to. Without these, the microphone could not work reliably.
+- Fix: **Wait for the HAOS PulseAudio socket at startup instead of racing it.** If the socket is absent, fail loudly rather than starting a second, hardware-less PulseAudio daemon that would shadow the host server and leave the container on a null sink with a dead microphone.
+- Fix: **Microphone permissions are now re-verified periodically.** `RECORD_AUDIO` was only ever granted on a fresh install, so a single Android permission auto-reset killed the microphone permanently with nothing in the log.
+- Fix: **Grant the `RECORD_AUDIO` appop**, so capture cannot be silently refused while the permission appears granted.
+- Fix: **Precise microphone source selection.** The previous substring match (including `"sound"`) could latch onto an unrelated card.
+- Fix: **Add `mic_volume` option (default 70%).** Capture gain was hardcoded to 100%, which clips on the ReSpeaker array and degrades wake-word/STT accuracy. `audio_volume` also no longer forces the shared server's microphone gain.
+- Fix: **Reduce PulseAudio default fragmentation to 4** so the resampler has headroom under CPU load, and accept the recorder's native rate/format (`PULSE_LATENCY_MSEC=60`) so resampling happens once centrally instead of per client.
+- Fix: **Drop the expensive `dumpsys window` call** from the 10-second keep-alive watchdog; it dumped the entire window-manager state over LXC+ADB and starved the audio threads of CPU.
+- Feature: Add an ALSA fallback that drives audio directly from inside Android (using the newly bind-mounted `/proc/asound`) if the shared PulseAudio socket is unreachable from the container. No-op on a normal boot.
+
 ## 1.0.28
 - Fix: Set default `audio_volume` to 80% to avoid speaker amplifier clipping and distortion on compact HDMI displays (e.g. MPI7002 7-inch LCDs).
 - Fix: Maintain PulseAudio native 44.1kHz rate with tuned 64KB interrupt buffers (`fragments=8 fragment_size=8192`) to prevent fractional resampler phase drift and choppy playback.

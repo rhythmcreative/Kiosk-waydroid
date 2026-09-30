@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.26}"
+echo " Version: ${ADDON_VERSION:-1.0.29}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -43,11 +43,20 @@ add_lxc_mount() {
     fi
 }
 add_lxc_mount /usr/lib/waydroid/data/configs/config_base "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
+# /dev/snd so ALSA can reach the HDMI codec (playback) and the ReSpeaker mic
+# array (capture). Without this, PulseAudio has no hw devices inside the
+# container and the microphone cannot work at all.
+add_lxc_mount /usr/lib/waydroid/data/configs/config_base "lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir 0 0"
+add_lxc_mount /usr/lib/waydroid/data/configs/config_base "lxc.mount.entry = /proc/asound proc/asound none rbind,create=dir 0 0"
 if [ -f /var/lib/waydroid/lxc/waydroid/config_base ]; then
     add_lxc_mount /var/lib/waydroid/lxc/waydroid/config_base "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
+    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config_base "lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir 0 0"
+    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config_base "lxc.mount.entry = /proc/asound proc/asound none rbind,create=dir 0 0"
 fi
 if [ -f /var/lib/waydroid/lxc/waydroid/config ]; then
     add_lxc_mount /var/lib/waydroid/lxc/waydroid/config "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
+    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config "lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir 0 0"
+    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config "lxc.mount.entry = /proc/asound proc/asound none rbind,create=dir 0 0"
 fi
 
 # 2. Setup D-Bus
@@ -90,42 +99,65 @@ done
 
 # 4. Setup Audio & Microphone (PulseAudio)
 mkdir -p /root/.config/pulse /run/user/0/pulse /run/audio
-chmod 0700 /run/user/0 /run/user/0/pulse 2>/dev/null || true
 
-if [ -S /run/audio/pulse.sock ]; then
-    export PULSE_SERVER="unix:/run/audio/pulse.sock"
-    ln -sf /run/audio/pulse.sock /run/user/0/pulse/native 2>/dev/null || true
-    ln -sf /run/audio/pulse.sock /run/audio/native 2>/dev/null || true
-    echo "Connected to HAOS PulseAudio socket at /run/audio/pulse.sock"
-elif [ -n "$PULSE_SERVER" ]; then
-    echo "Using PULSE_SERVER=$PULSE_SERVER"
-else
-    pulseaudio --start --exit-idle-time=-1 2>/dev/null || true
-    if [ -S /run/user/0/pulse/native ]; then
-        export PULSE_SERVER="unix:/run/user/0/pulse/native"
+# Single, stable socket path shared by the add-on side and the LXC container,
+# so there can only ever be one PulseAudio server in the picture and no race
+# between them at boot.
+PULSE_SOCK="/run/audio/pulse.sock"
+WAIT_FOR_PULSE=90
+_pulse_waited=0
+while [ ! -S "$PULSE_SOCK" ] && [ "$_pulse_waited" -lt "$WAIT_FOR_PULSE" ]; do
+    if [ "$_pulse_waited" -eq 0 ]; then
+        echo "Waiting for HAOS PulseAudio socket at $PULSE_SOCK..."
     fi
+    sleep 1
+    _pulse_waited=$((_pulse_waited + 1))
+done
+
+if [ ! -S "$PULSE_SOCK" ]; then
+    echo "ERROR: $PULSE_SOCK did not appear within ${WAIT_FOR_PULSE}s."
+    echo "ERROR: Refusing to start a private PulseAudio daemon. A second,"
+    echo "ERROR: hardware-less PA server would shadow the host one, leaving the"
+    echo "ERROR: container on a null sink with a dead microphone."
+    exit 1
 fi
 
-if command -v pactl >/dev/null 2>&1 && [ -S /run/audio/pulse.sock ]; then
+# PULSE_SERVER      -> for add-on-side clients (pactl, cage, anything inherited)
+# PULSE_RUNTIME_PATH -> read by Waydroid's Python at import time
+#                      (tools/config/__init__.py) to decide where to bind from
+#                      for the LXC container:
+#                        <PULSE_RUNTIME_PATH>/native -> /run/xdg/pulse/native
+#                      This is an ENVIRONMENT VARIABLE. Setting an Android
+#                      system property with this name has no effect.
+export PULSE_SERVER="unix:${PULSE_SOCK}"
+export PULSE_RUNTIME_PATH="/run/audio"
+
+# Ask the recorder for its native rate/formats instead of refusing them, so
+# PulseAudio resamples once centrally instead of every client negotiating its
+# own rate against the hardware and starving under CPU load.
+export PULSE_LATENCY_MSEC="${PULSE_LATENCY_MSEC:-60}"
+
+mkdir -p "${PULSE_RUNTIME_PATH}"
+ln -sf "$PULSE_SOCK" "${PULSE_RUNTIME_PATH}/native" 2>/dev/null || true
+ln -sf "$PULSE_SOCK" /run/user/0/pulse/native 2>/dev/null || true
+
+if command -v pactl >/dev/null 2>&1; then
     echo "Audio server status:"
     pactl info 2>/dev/null || echo "PulseAudio daemon active."
 
-    # Prevent HDMI audio crackle / 'crrg' and robotic distortion on Raspberry Pi 5 VC4 driver
-    # by using interrupt-based scheduling with tuned buffer fragments (tsched=no fragments=8 fragment_size=8192)
-    hdmi_card=$(pactl list cards short 2>/dev/null | grep -i 'vc4.*hdmi\|hdmi' | awk '{print $1}' | head -n1)
-    if [ -n "$hdmi_card" ]; then
-        mod_info=$(pactl list modules 2>/dev/null | grep -B 2 -A 8 "card_index=$hdmi_card" || true)
-        if echo "$mod_info" | grep -q "module-alsa-card" && { ! echo "$mod_info" | grep -q "tsched=0\|tsched=no" || ! echo "$mod_info" | grep -q "fragments=8"; }; then
-            mod_id=$(echo "$mod_info" | grep -o 'Module #[0-9]*' | head -n1 | cut -d'#' -f2)
-            if [ -n "$mod_id" ]; then
-                echo "Reloading VC4 HDMI module #$mod_id with tsched=no fragments=8 fragment_size=8192..."
-                card_name=$(pactl list cards 2>/dev/null | grep -A 5 "Card #$hdmi_card" | grep "Name:" | awk '{print $2}')
-                pactl unload-module "$mod_id" 2>/dev/null || true
-                sleep 0.5
-                pactl load-module module-alsa-card device_id="${card_name:-vc4-hdmi-0}" tsched=no fragments=8 fragment_size=8192 2>/dev/null || true
-            fi
-        fi
-    fi
+    # NOTE: we deliberately do NOT unload/reload module-alsa-card here.
+    # Unloading it destroys the sink and every live stream on the SHARED HAOS
+    # server (including Home Assistant's own TTS). The previous tuning
+    # ("tsched=no fragments=8 fragment_size=8192") asked for ~1.36 s of buffer
+    # at 48 kHz and disabled the ALSA timer scheduler, which is the documented
+    # cause of crackle on Raspberry Pi, not a cure for it.
+    # Stability now comes from keeping the module untouched and instead giving
+    # the resampler room to work (lower fragmentation + accepting the
+    # recorder's native rate, handled above and in kiosk_helper.py).
+    #
+    # If the HDMI codec ever turns out to expose no real volume control, the
+    # correct follow-up is the ALSA UCM topology for bcm2835hdmi, applied via
+    # /usr/share/alsa/ucm2/conf.d/ - not another module reload.
 
     # Set default audio sink to HDMI if available
     hdmi_sink=$(pactl list sinks short 2>/dev/null | grep -i 'hdmi' | awk '{print $2}' | head -n1)
@@ -134,12 +166,9 @@ if command -v pactl >/dev/null 2>&1 && [ -S /run/audio/pulse.sock ]; then
         pactl set-default-sink "$hdmi_sink" 2>/dev/null || true
     fi
 
-    # Set default audio source to Seeed ReSpeaker / microphone if available
-    seeed_source=$(pactl list sources short 2>/dev/null | grep -i 'seeed\|respeaker\|voice\|sound' | grep -v 'monitor' | awk '{print $2}' | head -n1)
-    if [ -n "$seeed_source" ]; then
-        echo "Setting default audio source to microphone: $seeed_source"
-        pactl set-default-source "$seeed_source" 2>/dev/null || true
-    fi
+    # Default source selection is owned by kiosk_helper.py, which matches
+    # precisely instead of the old broad 'sound' substring that could latch
+    # onto the wrong capture device.
 fi
 
 # 5. Initialize Waydroid if not already initialized
@@ -313,8 +342,11 @@ waydroid prop set ro.hardware.gralloc gbm 2>/dev/null || true
 waydroid prop set ro.hardware.egl mesa 2>/dev/null || true
 waydroid prop set debug.stagefright.ccodec 0 2>/dev/null || true
 waydroid prop set persist.waydroid.fake_touch true 2>/dev/null || true
-waydroid prop set waydroid.pulse_runtime_path /run/audio 2>/dev/null || true
-waydroid prop set persist.waydroid.pulse_runtime_path /run/audio 2>/dev/null || true
+
+# NOTE: do NOT set "waydroid.pulse_runtime_path" / "persist.waydroid.*" Android
+# properties here. Waydroid reads the PULSE_RUNTIME_PATH ENVIRONMENT VARIABLE
+# (see PULSE_RUNTIME_PATH above), so those properties were dead code and the
+# container was silently falling back to binding /run/user/0/pulse/native.
 
 waydroid container start &
 CONTAINER_PID=$!
