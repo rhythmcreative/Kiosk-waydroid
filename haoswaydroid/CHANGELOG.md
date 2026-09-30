@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.31
+- Revert: Restore `run.sh`, `kiosk_helper.py` and `config.yaml` to their state prior to v1.0.29. The audio and microphone changes from v1.0.29 / v1.0.30 are withdrawn; the container failed to start with `OSError: container failed to start`.
+- Fix: Strip any leftover `lxc.mount.entry` for `/proc/asound` or `/dev/snd` from the persisted LXC configs. This one change is deliberately kept from v1.0.30, because those entries were already written to `/var/lib/waydroid/lxc/waydroid/` before startup aborted and a plain code revert would leave them there, so the container would keep failing to start forever.
+- Note: `/proc/asound` is a procfs subdirectory, so `create=dir` makes LXC attempt `mkdir()` inside the container's own procfs, which fails with `EPERM`. Do not re-add that mount.
+
 ## 1.0.30
 - Fix: **Regression in 1.0.29 that prevented the container from starting** (`OSError: container failed to start`). The `/proc/asound` LXC bind mount added in 1.0.29 is invalid: `/proc/asound` is a subdirectory of procfs, so `create=dir` makes LXC attempt `mkdir()` inside the container's own procfs, which returns `EPERM`. The mount fails and LXC aborts. It was also unnecessary — `/proc/asound` is published by the kernel's ALSA subsystem and is already visible through the container's own `/proc`.
 - Fix: Actively **remove** any `/proc/asound` entry already persisted in `/var/lib/waydroid/lxc/waydroid/`, since those files survive add-on reinstalls and simply not adding the line again would leave the broken entry in place.
