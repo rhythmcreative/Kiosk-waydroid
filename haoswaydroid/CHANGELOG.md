@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.30
+- Fix: **Regression in 1.0.29 that prevented the container from starting** (`OSError: container failed to start`). The `/proc/asound` LXC bind mount added in 1.0.29 is invalid: `/proc/asound` is a subdirectory of procfs, so `create=dir` makes LXC attempt `mkdir()` inside the container's own procfs, which returns `EPERM`. The mount fails and LXC aborts. It was also unnecessary — `/proc/asound` is published by the kernel's ALSA subsystem and is already visible through the container's own `/proc`.
+- Fix: Actively **remove** any `/proc/asound` entry already persisted in `/var/lib/waydroid/lxc/waydroid/`, since those files survive add-on reinstalls and simply not adding the line again would leave the broken entry in place.
+- Fix: Make the `/dev/snd` bind mount conditional on the source existing and mark it `optional`, so a missing ALSA device can never block container startup.
+- Fix: Re-apply the LXC mount entries after `waydroid init`, since a fresh init regenerates `config_base`/`config` from scratch and would otherwise drop them.
+
 ## 1.0.29
 - Fix: **Remove the `module-alsa-card` unload/reload cycle.** It was tearing down the sink and every live stream on the *shared* HAOS PulseAudio server (including Home Assistant's own TTS). Stability is now achieved without touching a live module.
 - Fix: **Correct the buffer-size miscalculation that caused the choppy audio.** `fragment_size` is expressed in *frames*, not bytes: `8192 frames x 2ch x 2 bytes = 32 KB` per fragment, so `fragments=8` requested a **256 KB / ~1.365 s** buffer at 48 kHz, not the "64 KB / ~370 ms" recorded in 1.0.27. Combined with `tsched=no` (which disables the ALSA timer scheduler) this produced the very crackling and latency it was intended to cure.

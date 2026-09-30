@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.29}"
+echo " Version: ${ADDON_VERSION:-1.0.30}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -42,22 +42,53 @@ add_lxc_mount() {
         echo "$entry" >> "$file"
     fi
 }
-add_lxc_mount /usr/lib/waydroid/data/configs/config_base "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
-# /dev/snd so ALSA can reach the HDMI codec (playback) and the ReSpeaker mic
-# array (capture). Without this, PulseAudio has no hw devices inside the
-# container and the microphone cannot work at all.
-add_lxc_mount /usr/lib/waydroid/data/configs/config_base "lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir 0 0"
-add_lxc_mount /usr/lib/waydroid/data/configs/config_base "lxc.mount.entry = /proc/asound proc/asound none rbind,create=dir 0 0"
-if [ -f /var/lib/waydroid/lxc/waydroid/config_base ]; then
-    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config_base "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
-    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config_base "lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir 0 0"
-    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config_base "lxc.mount.entry = /proc/asound proc/asound none rbind,create=dir 0 0"
-fi
-if [ -f /var/lib/waydroid/lxc/waydroid/config ]; then
-    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
-    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config "lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir 0 0"
-    add_lxc_mount /var/lib/waydroid/lxc/waydroid/config "lxc.mount.entry = /proc/asound proc/asound none rbind,create=dir 0 0"
-fi
+
+# Strip LXC mount entries that were persisted by an earlier version.
+# add_lxc_mount writes into /var/lib/waydroid/lxc/waydroid/*, which survives
+# add-on reinstalls, so simply not adding a line again is not enough.
+remove_lxc_mount() {
+    local file="$1"
+    local pattern="$2"
+    if [ -f "$file" ] && grep -qF "$pattern" "$file"; then
+        sed -i "\|${pattern}|d" "$file" 2>/dev/null || true
+        echo "Removed stale LXC mount entry ($pattern) from $file"
+    fi
+}
+
+LXC_CONFIGS="/usr/lib/waydroid/data/configs/config_base
+/var/lib/waydroid/lxc/waydroid/config_base
+/var/lib/waydroid/lxc/waydroid/config"
+
+setup_lxc_mounts() {
+    # /proc/asound MUST NOT be bind-mounted into the container. It is a
+    # subdirectory of procfs, so "create=dir" makes LXC attempt mkdir() inside
+    # the container's own procfs, which returns EPERM. The mount then fails and
+    # the container aborts with "container failed to start". It is also
+    # unnecessary: /proc/asound is published by the kernel's ALSA subsystem,
+    # so it is already visible through the container's own /proc.
+    for cfg in $LXC_CONFIGS; do
+        remove_lxc_mount "$cfg" "lxc.mount.entry = /proc/asound"
+    done
+
+    # /dev/snd is added only when the source exists in this container, and is
+    # marked "optional" so a missing source can never block startup.
+    local snd_entry="lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir,optional 0 0"
+    if [ -d /dev/snd ]; then
+        for cfg in $LXC_CONFIGS; do
+            # Drop any earlier, non-optional variant before re-adding.
+            remove_lxc_mount "$cfg" "lxc.mount.entry = /dev/snd dev/snd none rbind,create=dir 0 0"
+            add_lxc_mount "$cfg" "$snd_entry"
+        done
+    else
+        echo "WARNING: /dev/snd not present in the add-on container; skipping ALSA bind mount."
+    fi
+
+    for cfg in $LXC_CONFIGS; do
+        add_lxc_mount "$cfg" "lxc.mount.entry = /run/audio run/audio none rbind,create=dir 0 0"
+    done
+}
+
+setup_lxc_mounts
 
 # 2. Setup D-Bus
 mkdir -p /run/dbus /etc/dbus-1/system.d
@@ -187,6 +218,10 @@ if [ ! -f /var/lib/waydroid/lxc/waydroid/config ]; then
     fi
     echo "Waydroid initialized."
 fi
+
+# Re-apply the LXC mount entries: a fresh "waydroid init" regenerates
+# config_base/config from scratch, which would otherwise drop them.
+setup_lxc_mounts
 
 # 6. Apply Container Compatibility Overlays
 if [ -f /var/lib/waydroid/images/system.img ]; then
