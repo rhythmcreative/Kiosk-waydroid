@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.31}"
+echo " Version: ${ADDON_VERSION:-1.0.32}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -104,21 +104,36 @@ done
 mkdir -p /root/.config/pulse /run/user/0/pulse /run/audio
 chmod 0700 /run/user/0 /run/user/0/pulse 2>/dev/null || true
 
-if [ -S /run/audio/pulse.sock ]; then
-    export PULSE_SERVER="unix:/run/audio/pulse.sock"
-    ln -sf /run/audio/pulse.sock /run/user/0/pulse/native 2>/dev/null || true
-    ln -sf /run/audio/pulse.sock /run/audio/native 2>/dev/null || true
-    echo "Connected to HAOS PulseAudio socket at /run/audio/pulse.sock"
-elif [ -n "$PULSE_SERVER" ]; then
-    echo "Using PULSE_SERVER=$PULSE_SERVER"
+# Locate a reachable PulseAudio server FIRST, before considering starting a
+# private daemon. The audio socket path differs between deployments: HAOS
+# mounts it at /run/audio/pulse.sock, while Home Assistant Supervised exposes
+# the host server at /var/lib/homeassistant/audio/external/pulse.sock. Probing
+# both avoids spawning a second, hardware-less PulseAudio that would fight the
+# host server for the ALSA devices.
+PA_SOCK=""
+for _cand in /run/audio/pulse.sock \
+             /var/lib/homeassistant/audio/external/pulse.sock; do
+    if [ -S "$_cand" ]; then PA_SOCK="$_cand"; break; fi
+done
+if [ -z "$PA_SOCK" ] && [ -n "$PULSE_SERVER" ] && [ -S "${PULSE_SERVER#unix:}" ]; then
+    PA_SOCK="${PULSE_SERVER#unix:}"
+fi
+
+if [ -n "$PA_SOCK" ]; then
+    export PULSE_SERVER="unix:${PA_SOCK}"
+    ln -sf "$PA_SOCK" /run/user/0/pulse/native 2>/dev/null || true
+    ln -sf "$PA_SOCK" /run/audio/native 2>/dev/null || true
+    echo "Connected to PulseAudio server at $PA_SOCK"
 else
+    echo "No host PulseAudio socket found; starting a private PulseAudio instance."
     pulseaudio --start --exit-idle-time=-1 2>/dev/null || true
     if [ -S /run/user/0/pulse/native ]; then
         export PULSE_SERVER="unix:/run/user/0/pulse/native"
+        PA_SOCK="/run/user/0/pulse/native"
     fi
 fi
 
-if command -v pactl >/dev/null 2>&1 && [ -S /run/audio/pulse.sock ]; then
+if command -v pactl >/dev/null 2>&1 && [ -n "$PA_SOCK" ] && pactl info >/dev/null 2>&1; then
     echo "Audio server status:"
     pactl info 2>/dev/null || echo "PulseAudio daemon active."
 
@@ -151,6 +166,57 @@ if command -v pactl >/dev/null 2>&1 && [ -S /run/audio/pulse.sock ]; then
     if [ -n "$seeed_source" ]; then
         echo "Setting default audio source to microphone: $seeed_source"
         pactl set-default-source "$seeed_source" 2>/dev/null || true
+    fi
+
+    # Force the ReSpeaker microphone card to run at its NATIVE 16 kHz.
+    #
+    # The seeed2micvoicec card is a combined play/record codec whose DSP runs
+    # at 16 kHz. Left at the PulseAudio default (44.1 kHz) every consumer
+    # (Waydroid and Home Assistant's voice assistant both request 16 kHz) is
+    # served by resampling 44.1 -> 16 kHz, which is what makes the wake word
+    # and voice recognition unreliable. Pinning the card to 16 kHz means no
+    # resampling anywhere on the capture path.
+    #
+    # Idempotent: does nothing when the source is already at the target rate.
+    # Never fatal: any failure leaves the current state untouched.
+    mic_native_rate() {
+        pactl list sources 2>/dev/null | awk '
+            /^\tName: alsa_input/ { found = 1; next }
+            found && /Sample Specification:/ {
+                for (i = 1; i <= NF; i++)
+                    if ($i ~ /Hz$/) { gsub("Hz", "", $i); print $i; exit }
+                exit
+            }'
+    }
+
+    _mic_rate=$(mic_native_rate)
+    if [ -n "$_mic_rate" ] && [ "$_mic_rate" != "16000" ]; then
+        _card_name=$(pactl list sources 2>/dev/null | awk '/^\tName: alsa_input/{print $2; exit}' | sed 's/^alsa_input\.//; s/\..*$//')
+        _mod_id=$(pactl list modules 2>/dev/null | awk -v c="$_card_name" '
+            /^Module #/ { id = $2; sub(/#/, "", id) }
+            /module-alsa-card/ { inblk = 1; next }
+            inblk && /Argument:/ { if (index($0, c)) { print id; exit } }')
+        if [ -n "$_mod_id" ] && [ -n "$_card_name" ]; then
+            echo "Microphone card is at ${_mic_rate} Hz; reloading at native 16000 Hz (module $_mod_id)..."
+            pactl unload-module "$_mod_id" >/dev/null 2>&1
+            sleep 2
+            pactl load-module module-alsa-card device_id=0 "name=${_card_name}" \
+                "card_name=alsa_card.${_card_name}" namereg_fail=false tsched=yes \
+                ignore_dB=no use_ucm=yes avoid_resampling=no rate=16000 >/dev/null 2>&1
+            sleep 2
+            _new_rate=$(mic_native_rate)
+            if [ "$_new_rate" = "16000" ]; then
+                echo "Microphone now running at native 16000 Hz - no resampling on the capture path."
+                seeed_source=$(pactl list sources short 2>/dev/null | grep -v monitor | awk '{print $2}' | head -n1)
+                [ -n "$seeed_source" ] && pactl set-default-source "$seeed_source" 2>/dev/null || true
+            else
+                echo "WARNING: microphone is at ${_new_rate:-unknown} Hz, expected 16000."
+            fi
+        else
+            echo "WARNING: could not identify the microphone ALSA module; leaving it untouched."
+        fi
+    elif [ "$_mic_rate" = "16000" ]; then
+        echo "Microphone already at native 16000 Hz - nothing to do."
     fi
 fi
 
