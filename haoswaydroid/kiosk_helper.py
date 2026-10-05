@@ -396,23 +396,104 @@ def configure_pulseaudio_routing(options):
 
     return True
 
-def setup_port_forwarding(options):
-    remote_port = options.get("remote_admin_port", 2324)
-    logger.info(f"Setting up port forward for Kiosk Satellite web admin on port {remote_port}")
-    
-    # Helper script to bridge into Waydroid Android container network namespace directly
-    proxy_script = "/usr/local/bin/kiosk_proxy.sh"
+def _write_proxy_script(container_port):
+    """Create a small helper script that enters the Waydroid netns and connects to 127.0.0.1:<port>.
+
+    One script per port is used so socat EXEC can be supervised independently
+    (e.g. /usr/local/bin/kiosk_proxy_2324.sh, kiosk_proxy_6053.sh).
+    """
+    proxy_script = f"/usr/local/bin/kiosk_proxy_{container_port}.sh"
     try:
         with open(proxy_script, "w") as f:
-            f.write("#!/bin/sh\nPID=$(lxc-info -P /var/lib/waydroid/lxc -n waydroid -p -H 2>/dev/null)\nif [ -n \"$PID\" ]; then\n    exec nsenter -t \"$PID\" -n socat - TCP:127.0.0.1:2324\nfi\n")
+            f.write(
+                "#!/bin/sh\n"
+                "PID=$(lxc-info -P /var/lib/waydroid/lxc -n waydroid -p -H 2>/dev/null)\n"
+                "if [ -n \"$PID\" ]; then\n"
+                f"    exec nsenter -t \"$PID\" -n socat - TCP:127.0.0.1:{container_port}\n"
+                "fi\n"
+            )
         os.chmod(proxy_script, 0o755)
+        return proxy_script
     except Exception as e:
-        logger.error(f"Failed to create kiosk_proxy script: {e}")
+        logger.error(f"Failed to create kiosk_proxy script for port {container_port}: {e}")
+        return None
 
-    # Kill any existing socat on remote_port
-    run_cmd(f"pkill -f 'socat.*{remote_port}'", shell=True)
-    # Start socat background proxy
-    subprocess.Popen(["socat", f"TCP-LISTEN:{remote_port},fork,reuseaddr", f"EXEC:{proxy_script}"])
+
+def _is_port_listening(port):
+    """Check if something is already listening on TCP <port> on this host."""
+    rc, out, _ = run_cmd(["sh", "-c", f"(ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -q ':{port} '"])
+    return rc == 0
+
+
+def _start_port_forward(host_port, container_port=None):
+    """Start socat TCP-LISTEN:<host_port> -> Waydroid 127.0.0.1:<container_port>."""
+    if not host_port or int(host_port) <= 0:
+        return False
+    host_port = int(host_port)
+    container_port = int(container_port) if container_port else host_port
+    proxy_script = _write_proxy_script(container_port)
+    if not proxy_script:
+        return False
+    # Kill any stale forwarder for this host port only (don't touch other ports)
+    run_cmd(f"pkill -f 'socat.*TCP-LISTEN:{host_port}'", shell=True)
+    time.sleep(0.5)
+    try:
+        subprocess.Popen(["socat", f"TCP-LISTEN:{host_port},fork,reuseaddr", f"EXEC:{proxy_script}"])
+        logger.info(f"Port forward started: 0.0.0.0:{host_port} -> Waydroid 127.0.0.1:{container_port}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to start port forward for {host_port}: {e}")
+        return False
+
+
+def setup_port_forwarding(options):
+    # Remote admin web UI (default 2324, configurable)
+    remote_port = options.get("remote_admin_port", 2324)
+    try:
+        remote_port = int(remote_port)
+    except (TypeError, ValueError):
+        remote_port = 2324
+    if remote_port and remote_port > 0:
+        logger.info(f"Setting up port forward for Kiosk Satellite web admin on port {remote_port}")
+        _start_port_forward(remote_port)
+    else:
+        logger.info("Remote admin port forwarding disabled (remote_admin_port=0).")
+
+    # ESPHome native API (default 6053, configurable).
+    # The Kiosk Satellite app serves its ESPHome API *inside* the Waydroid
+    # network namespace (192.168.240.x). Without this forward, Home Assistant
+    # (which sees only the HAOS host IP, thanks to host_network: true) gets
+    # "connection refused" when adding the ESPHome device, and mDNS discovery
+    # never crosses the container NAT. Forwarding host TCP 6053 -> Waydroid
+    # 127.0.0.1:6053 makes manual setup work:
+    #   Settings -> Devices & services -> Add ESPHome -> host=<HAOS-IP>, port=6053
+    #   + paste the encryption key shown in the kiosk Settings -> ESPHome page.
+    # NOTE: the value here MUST match the "API port" configured inside the
+    # Kiosk Satellite app (Settings -> ESPHome -> API port). Set to 0 to disable.
+    esphome_port = options.get("esphome_api_port", 6053)
+    try:
+        esphome_port = int(esphome_port)
+    except (TypeError, ValueError):
+        esphome_port = 6053
+    if esphome_port and esphome_port > 0:
+        logger.info(f"Setting up port forward for Kiosk Satellite ESPHome API on port {esphome_port}")
+        _start_port_forward(esphome_port)
+    else:
+        logger.info("ESPHome API port forwarding disabled (esphome_api_port=0).")
+
+
+def ensure_port_forwarding(options):
+    """Watchdog: restart any missing socat forwarder (remote admin + ESPHome)."""
+    for key in ("remote_admin_port", "esphome_api_port"):
+        try:
+            port = int(options.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if port <= 0:
+            continue
+        if not _is_port_listening(port):
+            logger.warning(f"Port forward for {port} ({key}) is down — restarting...")
+            _start_port_forward(port)
 
 def provision_android():
     logger.info("Configuring Android system settings (disabling lockscreen, sleep & networking)...")
@@ -479,7 +560,7 @@ def main():
     else:
         logger.info("App already installed — skipping permission grant to preserve user settings.")
 
-    # Setup remote web admin port forwarding
+    # Setup remote web admin + ESPHome API port forwarding
     setup_port_forwarding(options)
 
     # Launch app (only if auto_launch_kiosk is enabled)
@@ -502,6 +583,12 @@ def main():
 
     while True:
         time.sleep(10)
+
+        # Supervise socat forwarders (remote admin + ESPHome API) — restart if dead
+        try:
+            ensure_port_forwarding(options)
+        except Exception as e:
+            logger.debug(f"Port forward watchdog notice: {e}")
 
         # Check PulseAudio socket inode for hassio_audio restart
         try:

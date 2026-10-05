@@ -3,7 +3,7 @@ name: "Waydroid Kiosk Satellite"
 description: |
   Start Waydroid (Android container) in kiosk mode on local HAOS display
   with full microphone, sound, touch, and Kiosk-Satellite integration.
-version: "1.0.32"
+version: "1.0.33"
 slug: "haoswaydroid"
 url: "https://github.com/rhythmcreative/Kiosk-waydroid/tree/main/haoswaydroid"
 
@@ -106,6 +106,7 @@ options:
   display_dpi: 0
   display_orientation: "auto"
   remote_admin_port: 2324
+  esphome_api_port: 6053
   enable_camera: true
   audio_volume: 80
   keep_alive: true
@@ -119,6 +120,7 @@ schema:
   display_dpi: int(0,)
   display_orientation: list(auto|portrait|landscape|reverse-portrait|reverse-landscape)
   remote_admin_port: int(1024,49151)
+  esphome_api_port: int(0,49151)
   enable_camera: bool
   audio_volume: int(0,100)
   keep_alive: bool

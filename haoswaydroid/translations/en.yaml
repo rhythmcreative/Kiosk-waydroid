@@ -23,6 +23,9 @@ configuration:
   remote_admin_port:
     name: "Remote Admin Web Port"
     description: "Port to access the Kiosk Satellite Remote Administration web interface (default: 2324)."
+  esphome_api_port:
+    name: "ESPHome API Port"
+    description: "Host port forwarded to the Kiosk Satellite ESPHome API inside Waydroid (default: 6053). Must match API port in the app under Settings > ESPHome. Use Home Assistant IP + this port to add ESPHome manually. Set 0 to disable."
   enable_camera:
     name: "Enable Camera"
     description: "Allow Kiosk Satellite access to video input/webcams for gestures and streaming."
