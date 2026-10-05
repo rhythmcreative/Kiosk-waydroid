@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.34
+- Fix: **Proxy ESPHome tolerante al binding real de la app.** El 1.0.33 solo probaba `127.0.0.1` dentro del netns; si Kiosk bindea solo su `eth0` (192.168.240.x) el forward nacía pero HA recibía `connection reset`. El script ahora prueba `127.0.0.1` + IP de `eth0` + resto de IPs del contenedor y conecta a la primera que acepte TCP. `socat` con `bind=0.0.0.0` y verificación de que el puerto quedó escuchando (si está ocupado por otro proceso lo dice en el log).
+- Fix: **Diagnóstico `[diag]` en el log del add-on.** Al arrancar y cada 60s muestra: si host `2324/6053` escucha, PID de Waydroid, IPs del contenedor, qué `IP:puerto` interno acepta conexión (dice dónde escucha realmente la app), listeners Android y self-connect desde el host. Con eso se distingue "app no escucha" vs "forward caído" vs "puerto ocupado".
+- Docs: si el log dice `container 127.0.0.1:6053 reachable=False` pero `192.168.240.x:6053 reachable=True`, era este bug. Si dice `host 127.0.0.1:6053 self-connect=False`, el socat no pudo bindear (mira `ss -ltnp` en el log).
+
 ## 1.0.33
 - Fix: **Exponer la API ESPHome de Kiosk Satellite a Home Assistant.** La app sirve ESPHome dentro del netns de Waydroid (192.168.240.x), inaccesible desde la LAN, y solo se redirigía el puerto 2324. Ahora se redirige también TCP `esphome_api_port` (por defecto 6053, configurable, 0 = desactivado) de `0.0.0.0:<puerto>` al `127.0.0.1:<puerto>` dentro de Waydroid vía `nsenter + socat`, igual que el admin web. El reenvío se supervisa en el watchdog y se reinicia si muere.
 - Fix: El script proxy antes estaba hardcodeado a 2324 (`kiosk_proxy.sh`). Ahora es genérico por puerto (`kiosk_proxy_<puerto>.sh`) para no matar el otro forward al reiniciar uno.

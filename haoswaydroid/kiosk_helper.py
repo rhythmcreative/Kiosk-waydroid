@@ -396,21 +396,75 @@ def configure_pulseaudio_routing(options):
 
     return True
 
-def _write_proxy_script(container_port):
-    """Create a small helper script that enters the Waydroid netns and connects to 127.0.0.1:<port>.
+def _get_waydroid_pid():
+    rc, out, _ = run_cmd(["sh", "-c", "lxc-info -P /var/lib/waydroid/lxc -n waydroid -p -H 2>/dev/null || lxc-info -n waydroid -p -H 2>/dev/null"])
+    pid = (out or "").strip().split()[0] if (out or "").strip() else ""
+    return pid if pid.isdigit() else ""
 
-    One script per port is used so socat EXEC can be supervised independently
-    (e.g. /usr/local/bin/kiosk_proxy_2324.sh, kiosk_proxy_6053.sh).
+
+def _get_waydroid_ips(pid):
+    """Return list of IPv4s seen inside the container netns (eth0 etc)."""
+    if not pid:
+        return []
+    rc, out, _ = run_cmd(["nsenter", "-t", pid, "-n", "ip", "-4", "-o", "addr", "show"])
+    if rc != 0 or not out:
+        return []
+    ips = re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out)
+    # Prefer non-loopback, keep loopback last (127.0.0.1 is tried first anyway)
+    ordered = [ip for ip in ips if not ip.startswith("127.")]
+    if "127.0.0.1" in ips:
+        ordered.append("127.0.0.1")
+    return ordered
+
+
+def _test_tcp(host, port, timeout=3, netns_pid=None):
+    """True if TCP host:port accepts a connection (optionally inside container netns)."""
+    import socket
+    if netns_pid:
+        # Same filesystem, different netns: re-exec python inside netns via nsenter
+        code = (
+            "import socket,sys; s=socket.socket(); s.settimeout(%d); "
+            "s.connect(('%s',%d)); s.close()" % (timeout, host, int(port))
+        )
+        rc, _, _ = run_cmd(["nsenter", "-t", str(netns_pid), "-n", "python3", "-c", code])
+        return rc == 0
+    try:
+        s = socket.create_connection((host, int(port)), timeout=timeout)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def _write_proxy_script(container_port):
+    """Create /usr/local/bin/kiosk_proxy_<port>.sh that bridges into Waydroid netns.
+
+    The app may bind 0.0.0.0 (reachable via 127.0.0.1) or only its eth0 IP
+    (e.g. 192.168.240.x). The script probes candidates in order and connects
+    to the first one that accepts TCP, so a wrong guess never breaks forwarding.
     """
     proxy_script = f"/usr/local/bin/kiosk_proxy_{container_port}.sh"
     try:
         with open(proxy_script, "w") as f:
             f.write(
-                "#!/bin/sh\n"
+                "#!/bin/bash\n"
+                f"PORT={int(container_port)}\n"
                 "PID=$(lxc-info -P /var/lib/waydroid/lxc -n waydroid -p -H 2>/dev/null)\n"
-                "if [ -n \"$PID\" ]; then\n"
-                f"    exec nsenter -t \"$PID\" -n socat - TCP:127.0.0.1:{container_port}\n"
-                "fi\n"
+                "[ -n \"$PID\" ] || PID=$(lxc-info -n waydroid -p -H 2>/dev/null)\n"
+                "[ -n \"$PID\" ] || exit 1\n"
+                "# Candidate targets inside the container netns\n"
+                "CANDS=\"127.0.0.1\"\n"
+                "ETHIP=$(nsenter -t \"$PID\" -n ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)\n"
+                "[ -n \"$ETHIP\" ] && CANDS=\"$CANDS $ETHIP\"\n"
+                "ALLIPS=$(nsenter -t \"$PID\" -n ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\\.' | head -n5)\n"
+                "[ -n \"$ALLIPS\" ] && CANDS=\"$CANDS $ALLIPS\"\n"
+                "for H in $CANDS; do\n"
+                "  if nsenter -t \"$PID\" -n python3 -c \"import socket;s=socket.socket();s.settimeout(2);s.connect(('$H',$PORT));s.close()\" 2>/dev/null; then\n"
+                "    exec nsenter -t \"$PID\" -n socat - TCP:$H:$PORT\n"
+                "  fi\n"
+                "done\n"
+                "# Fallback: loopback (lets socat surface the real error in logs)\n"
+                "exec nsenter -t \"$PID\" -n socat - TCP:127.0.0.1:$PORT\n"
             )
         os.chmod(proxy_script, 0o755)
         return proxy_script
@@ -426,7 +480,7 @@ def _is_port_listening(port):
 
 
 def _start_port_forward(host_port, container_port=None):
-    """Start socat TCP-LISTEN:<host_port> -> Waydroid 127.0.0.1:<container_port>."""
+    """Start socat TCP-LISTEN:<host_port> -> Waydroid <container_port>, verify it stuck."""
     if not host_port or int(host_port) <= 0:
         return False
     host_port = int(host_port)
@@ -434,16 +488,75 @@ def _start_port_forward(host_port, container_port=None):
     proxy_script = _write_proxy_script(container_port)
     if not proxy_script:
         return False
-    # Kill any stale forwarder for this host port only (don't touch other ports)
+    # Kill only our own previous forwarder for this port
     run_cmd(f"pkill -f 'socat.*TCP-LISTEN:{host_port}'", shell=True)
     time.sleep(0.5)
     try:
-        subprocess.Popen(["socat", f"TCP-LISTEN:{host_port},fork,reuseaddr", f"EXEC:{proxy_script}"])
-        logger.info(f"Port forward started: 0.0.0.0:{host_port} -> Waydroid 127.0.0.1:{container_port}")
-        return True
+        subprocess.Popen(
+            ["socat", f"TCP-LISTEN:{host_port},bind=0.0.0.0,fork,reuseaddr", f"EXEC:{proxy_script}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        time.sleep(1.0)
+        if _is_port_listening(host_port):
+            logger.info(f"Port forward started: 0.0.0.0:{host_port} -> Waydroid :{container_port}")
+            return True
+        # Likely EADDRINUSE or missing binary — log the real cause
+        rc, out, err = run_cmd(["sh", "-c", f"(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null); echo ---; ps aux 2>/dev/null | grep -i socat | grep -v grep || true"])
+        logger.error(f"Port forward for {host_port} NOT listening after start. netstat/ps:\n{out}\n{err}")
+        return False
     except Exception as e:
         logger.error(f"Failed to start port forward for {host_port}: {e}")
         return False
+
+
+def diagnose_port_forwarding(options):
+    """Log everything needed to debug 'HA cannot add ESPHome': listeners, Waydroid IP, inner probes."""
+    try:
+        for key in ("remote_admin_port", "esphome_api_port"):
+            try:
+                port = int(options.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if port <= 0:
+                continue
+            listening = _is_port_listening(port)
+            rc, ss_out, _ = run_cmd(["sh", "-c", f"ss -ltnp 2>/dev/null | grep ':{port} ' || ss -ltn 2>/dev/null | grep ':{port} ' || echo 'not-listening'"])
+            logger.info(f"[diag] host TCP {port} ({key}): listening={listening} :: {ss_out[:500]}")
+        pid = _get_waydroid_pid()
+        logger.info(f"[diag] waydroid container PID: {pid or 'NOT-FOUND'}")
+        if pid:
+            rc, ip_out, _ = run_cmd(["nsenter", "-t", pid, "-n", "ip", "-4", "-o", "addr", "show"])
+            logger.info(f"[diag] container addrs: {(ip_out or '').replace(chr(10), ' ')[:500]}")
+            for key in ("remote_admin_port", "esphome_api_port"):
+                try:
+                    cport = int(options.get(key, 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if cport <= 0:
+                    continue
+                for target in ["127.0.0.1"] + _get_waydroid_ips(pid):
+                    ok = _test_tcp(target, cport, timeout=2, netns_pid=pid)
+                    logger.info(f"[diag] container {target}:{cport} ({key}) reachable={ok}")
+                    if ok:
+                        break
+            # What does Android itself think is listening?
+            rc, ls_out, _ = run_cmd(["waydroid", "shell", "netstat -ltn 2>/dev/null || ss -ltn 2>/dev/null || cat /proc/net/tcp 2>/dev/null"])
+            if ls_out:
+                hits = [l for l in ls_out.splitlines() if "2324" in l or "6053" in l]
+                logger.info(f"[diag] android listeners (2324/6053): {' | '.join(hits)[:800] or ls_out[:800]}")
+        # Host-side self-test: can HA Core reach us via HAOS IP / localhost?
+        for key in ("remote_admin_port", "esphome_api_port"):
+            try:
+                port = int(options.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if port <= 0:
+                continue
+            ok = _test_tcp("127.0.0.1", port, timeout=2)
+            logger.info(f"[diag] host 127.0.0.1:{port} ({key}) self-connect={ok}")
+    except Exception as e:
+        logger.debug(f"[diag] diagnose error: {e}")
 
 
 def setup_port_forwarding(options):
@@ -562,6 +675,11 @@ def main():
 
     # Setup remote web admin + ESPHome API port forwarding
     setup_port_forwarding(options)
+    # One-shot diagnostics so the add-on log tells us exactly why HA can't connect
+    try:
+        diagnose_port_forwarding(options)
+    except Exception as e:
+        logger.debug(f"Initial diagnose notice: {e}")
 
     # Launch app (only if auto_launch_kiosk is enabled)
     auto_launch = options.get("auto_launch_kiosk", True)
@@ -581,14 +699,23 @@ def main():
     except Exception:
         pass
 
+    loop_count = 0
     while True:
         time.sleep(10)
+        loop_count += 1
 
         # Supervise socat forwarders (remote admin + ESPHome API) — restart if dead
         try:
             ensure_port_forwarding(options)
         except Exception as e:
             logger.debug(f"Port forward watchdog notice: {e}")
+
+        # Full diagnostics every ~60s (every 6th loop) — shows in add-on log
+        if loop_count % 6 == 0:
+            try:
+                diagnose_port_forwarding(options)
+            except Exception as e:
+                logger.debug(f"Periodic diagnose notice: {e}")
 
         # Check PulseAudio socket inode for hassio_audio restart
         try:
