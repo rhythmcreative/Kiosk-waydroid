@@ -41,6 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
     nftables \
     iproute2 \
+    # mDNS advertisement so HA auto-discovers the forwarded ESPHome API
+    avahi-daemon \
+    avahi-utils \
     # Audio / Microphone Passthrough
     pulseaudio \
     pulseaudio-utils \

@@ -555,6 +555,13 @@ def diagnose_port_forwarding(options):
                 continue
             ok = _test_tcp("127.0.0.1", port, timeout=2)
             logger.info(f"[diag] host 127.0.0.1:{port} ({key}) self-connect={ok}")
+        # mDNS advertisement status (auto-discovery)
+        try:
+            adv = bool(options.get("esphome_advertise", True))
+            rc, pub_out, _ = run_cmd(["sh", "-c", "ps aux 2>/dev/null | grep '[a]vahi-publish-service.*_esphomelib' || echo 'mdns-off'"])
+            logger.info(f"[diag] mdns advertise={adv} name='{_mdns_instance_name(options)}' :: {(pub_out or '')[:300]}")
+        except Exception:
+            pass
     except Exception as e:
         logger.debug(f"[diag] diagnose error: {e}")
 
@@ -607,6 +614,75 @@ def ensure_port_forwarding(options):
         if not _is_port_listening(port):
             logger.warning(f"Port forward for {port} ({key}) is down — restarting...")
             _start_port_forward(port)
+
+def _mdns_instance_name(options):
+    """mDNS service instance name. Ideally == app Settings > ESPHome > Node name."""
+    raw = str(options.get("esphome_node_name", "") or "").strip()
+    if not raw:
+        raw = "ks-waydroid"
+    # Avahi instance names: keep it printable, max ~63 chars for sanity
+    raw = re.sub(r"\s+", " ", raw).strip()[:63] or "ks-waydroid"
+    return raw
+
+
+def ensure_avahi_daemon():
+    """Start avahi-daemon if missing (needed for avahi-publish-service). Returns True if running."""
+    rc, _, _ = run_cmd(["sh", "-c", "command -v avahi-daemon >/dev/null 2>&1"])
+    if rc != 0:
+        logger.debug("avahi-daemon binary missing (image not rebuilt yet?) — skipping mDNS.")
+        return False
+    rc, _, _ = run_cmd(["avahi-daemon", "--check"])
+    if rc == 0:
+        return True
+    run_cmd(["mkdir", "-p", "/run/avahi-daemon"])
+    run_cmd(["rm", "-f", "/run/avahi-daemon/pid"])
+    rc, out, err = run_cmd(["avahi-daemon", "-D"])
+    time.sleep(1.0)
+    rc2, _, _ = run_cmd(["avahi-daemon", "--check"])
+    if rc2 == 0:
+        logger.info("avahi-daemon started for ESPHome mDNS advertisement.")
+        return True
+    logger.warning(f"avahi-daemon could not start ({out} {err}) — discovery will rely on manual ESPHome setup.")
+    return False
+
+
+def ensure_mdns_advertising(options):
+    """Publish _esphomelib._tcp from the host so HA discovers the kiosk.
+
+    mDNS emitted inside the Waydroid container (192.168.240.x NAT) never
+    reaches the LAN, so without this HA never shows a 'Discovered' entry even
+    when the TCP forward works. We re-advertise the *forwarded* host port.
+    """
+    try:
+        advertise = bool(options.get("esphome_advertise", True))
+        port = int(options.get("esphome_api_port", 0) or 0)
+    except (TypeError, ValueError):
+        return
+    rc, _, _ = run_cmd(["sh", "-c", "command -v avahi-publish-service >/dev/null 2>&1"])
+    if rc != 0:
+        return  # image without avahi yet — TCP forward + manual add still work
+    if not advertise or port <= 0:
+        run_cmd("pkill -f 'avahi-publish-service.*_esphomelib._tcp' 2>/dev/null", shell=True)
+        return
+    if not ensure_avahi_daemon():
+        return
+    name = _mdns_instance_name(options)
+    # Already publishing this exact name+port? Keep it.
+    rc, out, _ = run_cmd(["sh", "-c", "ps aux 2>/dev/null | grep '[a]vahi-publish-service.*_esphomelib' || true"])
+    if name in (out or "") and f" {port} " in f" {out or ''} ":
+        return
+    run_cmd("pkill -f 'avahi-publish-service.*_esphomelib._tcp' 2>/dev/null", shell=True)
+    time.sleep(0.5)
+    try:
+        subprocess.Popen(
+            ["avahi-publish-service", name, "_esphomelib._tcp", str(port),
+             "version=2026.1.0", "platform=waydroid", "board=kiosk-satellite"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info(f"Advertising ESPHome via mDNS as '{name}' (_esphomelib._tcp:{port}).")
+    except Exception as e:
+        logger.warning(f"Could not start mDNS advertisement: {e}")
 
 def provision_android():
     logger.info("Configuring Android system settings (disabling lockscreen, sleep & networking)...")
@@ -675,6 +751,11 @@ def main():
 
     # Setup remote web admin + ESPHome API port forwarding
     setup_port_forwarding(options)
+    # Advertise _esphomelib._tcp from the host so HA shows Discovered
+    try:
+        ensure_mdns_advertising(options)
+    except Exception as e:
+        logger.debug(f"mDNS advertise notice: {e}")
     # One-shot diagnostics so the add-on log tells us exactly why HA can't connect
     try:
         diagnose_port_forwarding(options)
@@ -707,6 +788,7 @@ def main():
         # Supervise socat forwarders (remote admin + ESPHome API) — restart if dead
         try:
             ensure_port_forwarding(options)
+            ensure_mdns_advertising(options)
         except Exception as e:
             logger.debug(f"Port forward watchdog notice: {e}")
 

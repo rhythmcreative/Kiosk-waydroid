@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.35
+- Fix: **HA ahora sí descubre el kiosk (mDNS).** Aunque el TCP 6053 estuviera redirigido, el mDNS `_esphomelib._tcp` nace dentro del NAT de Waydroid y jamás llega a la LAN, así que nunca aparecía como Descubierto. El add-on ahora re-publica el servicio desde el host con `avahi-publish-service` (nueva imagen con `avahi-daemon`/`avahi-utils`), apuntando al puerto host redirigido. Nuevas opciones `esphome_advertise` (bool, default true) y `esphome_node_name` (default `ks-waydroid`, idealmente igual al Node name de la app y único por kiosco). Supervisado en watchdog + estado en `[diag] mdns`.
+- Nota: requiere rebuild de imagen por el Dockerfile. Hasta que se reconstruya, el forward TCP + añadido manual siguen funcionando sin mDNS.
+
 ## 1.0.34
 - Fix: **Proxy ESPHome tolerante al binding real de la app.** El 1.0.33 solo probaba `127.0.0.1` dentro del netns; si Kiosk bindea solo su `eth0` (192.168.240.x) el forward nacía pero HA recibía `connection reset`. El script ahora prueba `127.0.0.1` + IP de `eth0` + resto de IPs del contenedor y conecta a la primera que acepte TCP. `socat` con `bind=0.0.0.0` y verificación de que el puerto quedó escuchando (si está ocupado por otro proceso lo dice en el log).
 - Fix: **Diagnóstico `[diag]` en el log del add-on.** Al arrancar y cada 60s muestra: si host `2324/6053` escucha, PID de Waydroid, IPs del contenedor, qué `IP:puerto` interno acepta conexión (dice dónde escucha realmente la app), listeners Android y self-connect desde el host. Con eso se distingue "app no escucha" vs "forward caído" vs "puerto ocupado".
