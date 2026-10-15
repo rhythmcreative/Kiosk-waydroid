@@ -536,8 +536,9 @@ def _write_proxy_script(container_port):
     """Create /usr/local/bin/kiosk_proxy_<port>.sh that bridges into Waydroid netns.
 
     The app may bind 0.0.0.0 (reachable via 127.0.0.1) or only its eth0 IP
-    (e.g. 192.168.240.x). The script probes candidates in order and connects
-    to the first one that accepts TCP, so a wrong guess never breaks forwarding.
+    (e.g. 192.168.240.x). The script probes candidate targets and internal candidate
+    ports (such as 6055 and 6053 for ESPHome) so that any host port forwards to
+    whichever port the Android app is actually listening on.
     """
     proxy_script = f"/usr/local/bin/kiosk_proxy_{container_port}.sh"
     try:
@@ -554,10 +555,17 @@ def _write_proxy_script(container_port):
                 "[ -n \"$ETHIP\" ] && CANDS=\"$CANDS $ETHIP\"\n"
                 "ALLIPS=$(nsenter -t \"$PID\" -n ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\\.' | head -n5)\n"
                 "[ -n \"$ALLIPS\" ] && CANDS=\"$CANDS $ALLIPS\"\n"
-                "for H in $CANDS; do\n"
-                "  if nsenter -t \"$PID\" -n python3 -c \"import socket;s=socket.socket();s.settimeout(2);s.connect(('$H',$PORT));s.close()\" 2>/dev/null; then\n"
-                "    exec nsenter -t \"$PID\" -n socat - TCP:$H:$PORT\n"
-                "  fi\n"
+                "# Candidate internal ports: requested port first, then common Kiosk Satellite app ports (6055, 6053)\n"
+                "CAND_PORTS=\"$PORT\"\n"
+                "if [ \"$PORT\" != \"6055\" ] && [ \"$PORT\" != \"6053\" ] && [ \"$PORT\" -gt 6000 ] && [ \"$PORT\" -lt 6100 ]; then\n"
+                "  CAND_PORTS=\"$PORT 6055 6053\"\n"
+                "fi\n"
+                "for P in $CAND_PORTS; do\n"
+                "  for H in $CANDS; do\n"
+                "    if nsenter -t \"$PID\" -n python3 -c \"import socket;s=socket.socket();s.settimeout(1);s.connect(('$H',$P));s.close()\" 2>/dev/null; then\n"
+                "      exec nsenter -t \"$PID\" -n socat - TCP:$H:$P\n"
+                "    fi\n"
+                "  done\n"
                 "done\n"
                 "# Fallback: loopback (lets socat surface the real error in logs)\n"
                 "exec nsenter -t \"$PID\" -n socat - TCP:127.0.0.1:$PORT\n"
@@ -594,12 +602,17 @@ def _start_port_forward(host_port, container_port=None):
             start_new_session=True,
         )
         time.sleep(1.0)
-        if _is_port_listening(host_port):
+        # Verify that OUR socat process is alive
+        rc, out, _ = run_cmd(["sh", "-c", f"ps aux 2>/dev/null | grep -v grep | grep 'socat.*TCP-LISTEN:{host_port}'"])
+        if rc == 0 and out.strip():
             logger.info(f"Port forward started: 0.0.0.0:{host_port} -> Waydroid :{container_port}")
             return True
-        # Likely EADDRINUSE or missing binary — log the real cause
-        rc, out, err = run_cmd(["sh", "-c", f"(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null); echo ---; ps aux 2>/dev/null | grep -i socat | grep -v grep || true"])
-        logger.error(f"Port forward for {host_port} NOT listening after start. netstat/ps:\n{out}\n{err}")
+        # If socat did not stay up, another process owns the port or binary missing
+        rc, ss_out, _ = run_cmd(["sh", "-c", f"ss -ltnp 2>/dev/null | grep ':{host_port} ' || true"])
+        if ss_out.strip():
+            logger.error(f"Port forward for {host_port} FAILED: port is already in use on host ({ss_out.strip()}). Please choose another port (e.g. 6056) in add-on options.")
+        else:
+            logger.error(f"Port forward for {host_port} failed to start socat.")
         return False
     except Exception as e:
         logger.error(f"Failed to start port forward for {host_port}: {e}")
@@ -711,21 +724,76 @@ def ensure_port_forwarding(options):
             logger.warning(f"Port forward for {port} ({key}) is down — restarting...")
             _start_port_forward(port)
 
+_zeroconf_state = {
+    "zc": None,
+    "info": None,
+    "port": 0,
+    "name": "",
+    "mac": "",
+}
+
+
 def _mdns_instance_name(options):
-    """mDNS service instance name. Ideally == app Settings > ESPHome > Node name."""
+    """mDNS service instance name. Defaults to 'waydroid' (matching Kiosk Satellite default)."""
     raw = str(options.get("esphome_node_name", "") or "").strip()
     if not raw:
-        raw = "ks-waydroid"
-    # Avahi instance names: keep it printable, max ~63 chars for sanity
-    raw = re.sub(r"\s+", " ", raw).strip()[:63] or "ks-waydroid"
+        raw = "waydroid"
+    # Avahi/mDNS instance names: keep printable, max 63 chars
+    raw = re.sub(r"\s+", " ", raw).strip()[:63] or "waydroid"
     return raw
+
+
+def get_waydroid_mac():
+    """Retrieve the unique MAC address of the Waydroid Android container."""
+    pid = _get_waydroid_pid()
+    if pid:
+        # Extract eth0 link ether inside container netns
+        rc, out, _ = run_cmd(["sh", "-c", f"nsenter -t {pid} -n ip -o link show eth0 2>/dev/null | awk '{{for(i=1;i<=NF;i++) if($i==\"link/ether\") print $(i+1)}}'"])
+        if rc == 0 and out.strip() and ":" in out:
+            return out.strip().replace(":", "").lower()
+    # Check if avahi has already discovered the internal advertisement with mac=
+    rc, out, _ = run_cmd(["sh", "-c", "avahi-browse -r -t _esphomelib._tcp 2>/dev/null | grep 'mac=' | head -n1"])
+    if rc == 0 and out:
+        m = re.search(r'mac=([0-9a-fA-F:]+)', out)
+        if m:
+            return m.group(1).replace(":", "").lower()
+    # Fallback to deterministic pseudo-MAC from machine-id
+    try:
+        if os.path.exists("/etc/machine-id"):
+            with open("/etc/machine-id") as f:
+                mid = f.read().strip()[:8]
+                return f"00163e{mid[:6]}".lower()
+    except Exception:
+        pass
+    return "00163ef9d303"
+
+
+def get_host_lan_ips():
+    """Get host LAN IP addresses (excluding internal container NATs)."""
+    ips = []
+    try:
+        rc, out, _ = run_cmd(["sh", "-c", "ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i==\"src\") print $(i+1)}'"])
+        if rc == 0 and out.strip():
+            ips.append(out.strip())
+    except Exception:
+        pass
+    try:
+        rc, out, _ = run_cmd(["sh", "-c", "ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1"])
+        if rc == 0 and out.strip():
+            for line in out.strip().splitlines():
+                ip = line.strip()
+                if ip and not ip.startswith("127.") and not ip.startswith("172.17.") and not ip.startswith("172.30.") and not ip.startswith("192.168.240."):
+                    if ip not in ips:
+                        ips.append(ip)
+    except Exception:
+        pass
+    return ips or ["127.0.0.1"]
 
 
 def ensure_avahi_daemon():
     """Start avahi-daemon if missing (needed for avahi-publish-service). Returns True if running."""
     rc, _, _ = run_cmd(["sh", "-c", "command -v avahi-daemon >/dev/null 2>&1"])
     if rc != 0:
-        logger.debug("avahi-daemon binary missing (image not rebuilt yet?) — skipping mDNS.")
         return False
     rc, _, _ = run_cmd(["avahi-daemon", "--check"])
     if rc == 0:
@@ -738,47 +806,108 @@ def ensure_avahi_daemon():
     if rc2 == 0:
         logger.info("avahi-daemon started for ESPHome mDNS advertisement.")
         return True
-    logger.warning(f"avahi-daemon could not start ({out} {err}) — discovery will rely on manual ESPHome setup.")
     return False
 
 
 def ensure_mdns_advertising(options):
-    """Publish _esphomelib._tcp from the host so HA discovers the kiosk.
+    """Publish _esphomelib._tcp on host network so Home Assistant discovers the kiosk.
 
-    mDNS emitted inside the Waydroid container (192.168.240.x NAT) never
-    reaches the LAN, so without this HA never shows a 'Discovered' entry even
-    when the TCP forward works. We re-advertise the *forwarded* host port.
+    Includes the strictly required 'mac' property (Home Assistant aborts discovery
+    with 'mdns_missing_mac' if absent). Uses python-zeroconf when available for
+    clean host socket binding without Avahi daemon conflicts, falling back to
+    avahi-publish-service.
     """
+    global _zeroconf_state
     try:
         advertise = bool(options.get("esphome_advertise", True))
         port = int(options.get("esphome_api_port", 0) or 0)
     except (TypeError, ValueError):
         return
-    rc, _, _ = run_cmd(["sh", "-c", "command -v avahi-publish-service >/dev/null 2>&1"])
-    if rc != 0:
-        return  # image without avahi yet — TCP forward + manual add still work
+
+    name = _mdns_instance_name(options)
+
     if not advertise or port <= 0:
+        if _zeroconf_state["zc"]:
+            try:
+                _zeroconf_state["zc"].unregister_all_services()
+                _zeroconf_state["zc"].close()
+            except Exception:
+                pass
+            _zeroconf_state["zc"] = None
         run_cmd("pkill -f 'avahi-publish-service.*_esphomelib._tcp' 2>/dev/null", shell=True)
         return
+
+    mac = get_waydroid_mac()
+
+    # If already advertising with this exact configuration, nothing to do
+    if (_zeroconf_state["zc"] and _zeroconf_state["port"] == port and 
+        _zeroconf_state["name"] == name and _zeroconf_state["mac"] == mac):
+        return
+
+    # Clean up previous advertisement if configuration changed
+    if _zeroconf_state["zc"]:
+        try:
+            _zeroconf_state["zc"].unregister_all_services()
+            _zeroconf_state["zc"].close()
+        except Exception:
+            pass
+        _zeroconf_state["zc"] = None
+    run_cmd("pkill -f 'avahi-publish-service.*_esphomelib._tcp' 2>/dev/null", shell=True)
+
+    host_ips = get_host_lan_ips()
+    friendly_name = name.capitalize()
+
+    # Try native Python zeroconf first
+    try:
+        import socket
+        from zeroconf import Zeroconf, ServiceInfo
+
+        desc = {
+            "mac": mac,
+            "friendly_name": friendly_name,
+            "version": "2026.10.0",
+            "platform": "ESP32",
+            "board": "kiosk-satellite",
+            "network": "wifi",
+            "project_name": "kiosk_satellite.bluetooth_proxy",
+            "project_version": "2026.10.26",
+        }
+
+        service_info = ServiceInfo(
+            "_esphomelib._tcp.local.",
+            f"{name}._esphomelib._tcp.local.",
+            addresses=[socket.inet_aton(ip) for ip in host_ips if "." in ip],
+            port=port,
+            properties=desc,
+            server=f"{name}.local.",
+        )
+
+        zc = Zeroconf(interfaces=host_ips)
+        zc.register_service(service_info)
+        _zeroconf_state["zc"] = zc
+        _zeroconf_state["info"] = service_info
+        _zeroconf_state["port"] = port
+        _zeroconf_state["name"] = name
+        _zeroconf_state["mac"] = mac
+        logger.info(f"Advertising ESPHome via Python Zeroconf as '{name}' (_esphomelib._tcp:{port}, mac={mac}, ips={host_ips}).")
+        return
+    except Exception as e:
+        logger.debug(f"Python Zeroconf registration skipped ({e}), falling back to Avahi...")
+
+    # Fallback: avahi-publish-service with full TXT records including mac
     if not ensure_avahi_daemon():
         return
-    name = _mdns_instance_name(options)
-    # Already publishing this exact name+port? Keep it.
-    rc, out, _ = run_cmd(["sh", "-c", "ps aux 2>/dev/null | grep '[a]vahi-publish-service.*_esphomelib' || true"])
-    if name in (out or "") and f" {port} " in f" {out or ''} ":
-        return
-    run_cmd("pkill -f 'avahi-publish-service.*_esphomelib._tcp' 2>/dev/null", shell=True)
-    time.sleep(0.5)
     try:
         subprocess.Popen(
             ["avahi-publish-service", name, "_esphomelib._tcp", str(port),
-             "version=2026.1.0", "platform=waydroid", "board=kiosk-satellite"],
+             f"mac={mac}", f"friendly_name={friendly_name}",
+             "version=2026.10.0", "platform=ESP32", "board=kiosk-satellite", "network=wifi"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
-        logger.info(f"Advertising ESPHome via mDNS as '{name}' (_esphomelib._tcp:{port}).")
+        logger.info(f"Advertising ESPHome via Avahi as '{name}' (_esphomelib._tcp:{port}, mac={mac}).")
     except Exception as e:
-        logger.warning(f"Could not start mDNS advertisement: {e}")
+        logger.warning(f"Could not start Avahi mDNS advertisement: {e}")
 
 def provision_android():
     logger.info("Configuring Android system settings (disabling lockscreen, sleep & networking)...")

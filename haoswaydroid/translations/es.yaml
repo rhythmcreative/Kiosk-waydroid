@@ -25,13 +25,13 @@ configuration:
     description: "Puerto para acceder a la interfaz web de administración remota de Kiosk Satellite (por defecto: 2324)."
   esphome_api_port:
     name: "Puerto API ESPHome"
-    description: "Puerto del host redirigido a la API ESPHome de Kiosk Satellite dentro de Waydroid (por defecto: 6053). Debe coincidir con API port en la app en Ajustes > ESPHome. Usa la IP de Home Assistant + este puerto para añadir ESPHome manualmente. 0 para desactivar."
+    description: "Puerto del host redirigido a la API ESPHome de Kiosk Satellite dentro de Waydroid (por defecto: 6056 para evitar colisiones con otros satélites de voz en 6053/6055). El proxy detecta dinámicamente y redirige a cualquier puerto interno que use la app (6055, 6053 o este puerto). 0 para desactivar."
   esphome_advertise:
     name: "Anunciar ESPHome por mDNS"
-    description: "Publica _esphomelib._tcp en la LAN para que Home Assistant lo muestre como Descubierto. Requiere esphome_api_port > 0. El mDNS de dentro de Waydroid nunca cruza su NAT, así que el add-on lo re-anuncia desde el host."
+    description: "Publica _esphomelib._tcp en la LAN incluyendo la dirección MAC del dispositivo para que Home Assistant lo detecte inmediatamente en Dispositivos Descubiertos. Requiere esphome_api_port > 0."
   esphome_node_name:
     name: "Nombre de nodo ESPHome"
-    description: "Nombre de instancia mDNS, p. ej. ks-waydroid. Idealmente igual que Ajustes > ESPHome > Node name en la app. Debe ser único por kiosco."
+    description: "Nombre de instancia mDNS (por defecto: waydroid). Coincide con Ajustes > ESPHome > Node name en la app. Debe ser único por kiosco."
   enable_camera:
     name: "Habilitar Cámara"
     description: "Permitir a Kiosk Satellite acceso a cámaras para gestos y transmisión de video."

@@ -55,6 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-requests \
     python3-aiohttp \
+    python3-zeroconf \
     python3-pip \
     && apt-get install -y -t bookworm-backports --no-install-recommends \
     libdrm2 \
