@@ -100,8 +100,9 @@
 
 ## 1.0.18
 - Fix: Add dummy_lmkd daemon to resolve system_server ANR hang and fix cage ui timing.
-- Fix: Comment out `capabilities` in system/vendor rc files to prevent Android `init` from aborting `logd` with status 6 on unsupported capability sets.
-- Fix: Launch `waydroid show-full-ui &` immediately in `cage-run.sh` to eliminate the black screen delay during boot.
+
+## 1.0.17
+- Fix: Comment out capabilities to fix logd crash and launch show-full-ui immediately to eliminate black screen.
 
 ## 1.0.16
 - Fix: Remove `WLR_DRM_NO_MODIFIERS=1` to restore V3D 7.1 hardware accelerated surface modifiers required by wlroots `render.c` commit on Raspberry Pi 5.
@@ -116,6 +117,11 @@
 - Fix: Configure `WLR_RENDERER=gles2` and remove `WLR_RENDERER_ALLOW_SOFTWARE` to prevent Cage from falling back to CPU rendering.
 - Fix: Disable Android lockscreen, keyguard, and screen timeout (`stay_on_while_plugged_in 3`, `screen_off_timeout 2147483647`, `lockscreen.disabled 1`) at boot to ensure direct touch response.
 - Fix: Launch Kiosk Satellite directly using `am start -n me.jxl.kiosk_satellite/.MainActivity` after dismissing keyguard to ensure immediate application presentation and touch focus.
+
+## 1.0.14
+- Fix: Hardware acceleration (V3D 7.1 via renderD128) and touch screen responsiveness.
+
+## 1.0.13
 - Fix: Enable host udev support (`udev: true`) in add-on configuration so Cage and libinput can detect and tag USB touchscreens, mice, and keyboards.
 - Fix: Add `/dev/uinput`, `/dev/input/mice`, and `/dev/input/mouse0` to add-on device permissions.
 - Fix: Automatically initialize fallback `systemd-udevd` daemon and run `udevadm trigger` if host udev database is not mounted.
