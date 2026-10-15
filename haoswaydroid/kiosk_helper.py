@@ -342,7 +342,7 @@ def configure_pulseaudio_routing(options):
 
     rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
 
-    # 3. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with tsched=no and tuned buffer fragments
+    # 3. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with rate=48000 tsched=yes
     for c in cards:
         cname = (c.get("alsa_name") or "").lower()
         cdrv = (c.get("alsa_driver") or "").lower()
@@ -355,15 +355,15 @@ def configure_pulseaudio_routing(options):
                     if block.strip().startswith(mod_id):
                         mod_block = block.lower()
                         break
-            needs_reload = ("tsched=no" not in mod_block and "tsched=0" not in mod_block) or ("fragments=8" not in mod_block)
+            needs_reload = "rate=48000" not in mod_block
             if needs_reload and mod_id:
-                logger.info(f"VC4 HDMI (card {alsa_card}, module #{mod_id}) needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192 rate=48000...")
+                logger.info(f"VC4 HDMI (card {alsa_card}, module #{mod_id}) needs rate=48000; reloading with rate=48000 tsched=yes...")
                 run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
                 time.sleep(0.5)
-                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "tsched=no", "fragments=8", "fragment_size=8192", "rate=48000"], env=pulse_env)
+                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "rate=48000", "tsched=yes"], env=pulse_env)
             break
 
-    # 4. Tune or load Seeed / ReSpeaker card with low-latency buffer (rate=48000 tsched_buffer_size=16384)
+    # 4. Tune or load Seeed / ReSpeaker card at native 16 kHz DSP capture rate (eliminates speex resampling and voice drops)
     seeed_found = False
     for c in cards:
         cname = (c.get("alsa_name") or "").lower()
@@ -378,11 +378,11 @@ def configure_pulseaudio_routing(options):
                     if block.strip().startswith(mod_id):
                         mod_block = block.lower()
                         break
-            if "tsched_buffer_size" not in mod_block and mod_id:
-                logger.info(f"ReSpeaker card (card {alsa_card}, module #{mod_id}) needs low-latency buffer; reloading with rate=48000 tsched_buffer_size=16384...")
+            if "rate=16000" not in mod_block and mod_id:
+                logger.info(f"ReSpeaker card (card {alsa_card}, module #{mod_id}) needs native 16000 Hz; reloading with rate=16000 tsched=yes...")
                 run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
                 time.sleep(0.5)
-                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "rate=48000", "tsched_buffer_size=16384"], env=pulse_env)
+                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "rate=16000", "tsched=yes"], env=pulse_env)
             break
 
     if not seeed_found:
@@ -394,8 +394,8 @@ def configure_pulseaudio_routing(options):
                             parts = line.split()
                             if parts and parts[0].isdigit():
                                 c_idx = parts[0]
-                                logger.info(f"Loading ReSpeaker card (ALSA card {c_idx}) into PulseAudio with rate=48000 tsched_buffer_size=16384...")
-                                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={c_idx}", "rate=48000", "tsched_buffer_size=16384"], env=pulse_env)
+                                logger.info(f"Loading ReSpeaker card (ALSA card {c_idx}) into PulseAudio with native rate=16000 tsched=yes...")
+                                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={c_idx}", "rate=16000", "tsched=yes"], env=pulse_env)
                                 break
         except Exception as e:
             logger.debug(f"Notice inspecting /proc/asound/cards: {e}")
@@ -429,10 +429,10 @@ def configure_pulseaudio_routing(options):
         if ha_sink and ha_sink in all_sinks:
             target_sink = ha_sink
         else:
-            # Prefer ReSpeaker / Voice card if available, else HDMI
-            target_sink = next((s for s in all_sinks if any(k in s.lower() for k in ["seeed", "voice", "respeaker", "sound", ".2."])), None)
+            # Prefer HDMI if available (since this is an on-screen kiosk), else ReSpeaker
+            target_sink = next((s for s in all_sinks if "hdmi" in s.lower() or "vc4" in s.lower()), None)
             if not target_sink:
-                target_sink = next((s for s in all_sinks if "hdmi" in s.lower() or "vc4" in s.lower()), None)
+                target_sink = next((s for s in all_sinks if any(k in s.lower() for k in ["seeed", "voice", "respeaker", "sound", ".2."])), None)
 
     if target_sink:
         logger.info(f"Setting default audio sink to: {target_sink}")

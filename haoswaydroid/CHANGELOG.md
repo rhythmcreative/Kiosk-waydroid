@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.38
+- Fix: **Eliminación de cortes de voz al hablar y solución definitiva de audio HDMI en Raspberry Pi 5.**
+  - **Captura de micrófono nativa a 16.000 Hz sin remuestreo:** La tarjeta de micrófonos ReSpeaker / Seeed (`seeed2micvoicec`) procesa el audio internamente a 16 kHz. En versiones anteriores se forzaba erróneamente a 48 kHz, lo que obligaba a PulseAudio a ejecutar un remuestreo en tiempo real (`speex-float-1`) simultáneo para Waydroid y Assist Satellite. Esto producía pérdidas de paquetes, retardos de buffer y cortes de frase durante el reconocimiento de voz. Al fijarse en sus 16.000 Hz nativos (`rate=16000`), el flujo pasa directamente como `copy` sin latencia ni cortes.
+  - **Eliminación del bucle de desbordamiento de buffer (`POLLOUT`) en HDMI:** El driver ALSA `vc4-hdmi` en Raspberry Pi 5 falla si se utiliza `tsched=no` (despierta continuamente a PulseAudio indicando espacio para escribir cuando `avail == 0`), produciendo chasquidos, distorsión metálica y cortes de audio. Configurando `rate=48000 tsched=yes` el driver opera de forma completamente estable.
+  - **Lectura directa de las preferencias de usuario de `/data/options.json` en el arranque:** `run.sh` ahora lee directamente las opciones `audio_output_device`, `audio_input_device` y `audio_volume` desde el inicio del contenedor, garantizando que si se selecciona `hdmi`, el sonido se redirija inmediatamente a la pantalla y al volumen configurado sin sobrescribirse por la tarjeta de micrófono.
 ## 1.0.37
 - Fix: **Resolución del puerto ESPHome y auto-descubrimiento en Home Assistant.**
   - **Puerto por defecto cambiado a 6056:** En instalaciones con Voice Satellite / Assist Satellite (`linux_voice_assistant`) u otros satélites, los puertos host 6053 y 6055 ya están ocupados en la máquina por el servicio de voz, y el puerto 6054 suele estar tomado por el propio Home Assistant. El puerto 6056 está libre y evita cualquier colisión de socket.

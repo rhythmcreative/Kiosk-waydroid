@@ -155,32 +155,37 @@ if command -v pactl >/dev/null 2>&1 && [ -n "$PA_SOCK" ] && pactl info >/dev/nul
         }
     ')"
 
-    # 2. Tune VC4 HDMI card to prevent crackle and robotic distortion on Raspberry Pi 5 (tsched=no fragments=8 fragment_size=8192 rate=48000)
+    # Parse user options from /data/options.json
+    OPT_AUDIO_OUTPUT=$(jq -r '.audio_output_device // "auto"' /data/options.json 2>/dev/null || echo "auto")
+    OPT_AUDIO_INPUT=$(jq -r '.audio_input_device // "auto"' /data/options.json 2>/dev/null || echo "auto")
+    OPT_AUDIO_VOLUME=$(jq -r '.audio_volume // 80' /data/options.json 2>/dev/null || echo "80")
+
+    # 2. Tune VC4 HDMI card for clean 48 kHz playback with timer-based scheduling
     if [ -n "$HDMI_CARD_NUM" ] && [ -n "$HDMI_MOD_ID" ]; then
         mod_info=$(pactl list modules 2>/dev/null | grep -B 2 -A 8 "card_index=$HDMI_CARD_NUM" || true)
-        if ! echo "$mod_info" | grep -q "tsched=0\|tsched=no" || ! echo "$mod_info" | grep -q "fragments=8"; then
-            echo "Tuning VC4 HDMI audio (card $HDMI_CARD_NUM, module $HDMI_MOD_ID) with tsched=no fragments=8 fragment_size=8192 rate=48000..."
+        if ! echo "$mod_info" | grep -q "rate=48000"; then
+            echo "Tuning VC4 HDMI audio (card $HDMI_CARD_NUM, module $HDMI_MOD_ID) with rate=48000 tsched=yes..."
             pactl unload-module "$HDMI_MOD_ID" 2>/dev/null || true
             sleep 0.5
-            pactl load-module module-alsa-card device_id="$HDMI_CARD_NUM" tsched=no fragments=8 fragment_size=8192 rate=48000 2>/dev/null || true
+            pactl load-module module-alsa-card device_id="$HDMI_CARD_NUM" rate=48000 tsched=yes 2>/dev/null || true
         fi
     fi
 
-    # 3. Tune or load Seeed / ReSpeaker card with low-latency buffer (rate=48000 tsched_buffer_size=16384)
-    # If not yet discovered in PulseAudio, detect from ALSA /proc/asound/cards
+    # 3. Tune or load Seeed / ReSpeaker card at its native 16 kHz DSP capture rate
+    # Native 16 kHz eliminates all speex resampling overhead and audio dropouts on voice assistants
     if [ -z "$SEEED_CARD_NUM" ]; then
         seeed_alsa_num=$(grep -i 'seeed\|respeaker\|voice' /proc/asound/cards 2>/dev/null | awk '{print $1}' | head -n1)
         if [ -n "$seeed_alsa_num" ]; then
-            echo "Loading ReSpeaker card (ALSA card $seeed_alsa_num) into PulseAudio..."
-            pactl load-module module-alsa-card device_id="$seeed_alsa_num" rate=48000 tsched_buffer_size=16384 2>/dev/null || true
+            echo "Loading ReSpeaker card (ALSA card $seeed_alsa_num) into PulseAudio at native 16000 Hz..."
+            pactl load-module module-alsa-card device_id="$seeed_alsa_num" rate=16000 tsched=yes 2>/dev/null || true
         fi
     elif [ -n "$SEEED_MOD_ID" ]; then
         seeed_mod_args=$(pactl list modules 2>/dev/null | grep -A 4 "^Module #$SEEED_MOD_ID" | grep "Argument:" || true)
-        if ! echo "$seeed_mod_args" | grep -q "tsched_buffer_size"; then
-            echo "Tuning ReSpeaker card (card $SEEED_CARD_NUM, module $SEEED_MOD_ID) with rate=48000 tsched_buffer_size=16384..."
+        if ! echo "$seeed_mod_args" | grep -q "rate=16000"; then
+            echo "Tuning ReSpeaker card (card $SEEED_CARD_NUM, module $SEEED_MOD_ID) with native rate=16000 tsched=yes..."
             pactl unload-module "$SEEED_MOD_ID" 2>/dev/null || true
             sleep 0.5
-            pactl load-module module-alsa-card device_id="$SEEED_CARD_NUM" rate=48000 tsched_buffer_size=16384 2>/dev/null || true
+            pactl load-module module-alsa-card device_id="$SEEED_CARD_NUM" rate=16000 tsched=yes 2>/dev/null || true
         fi
     fi
 
@@ -199,25 +204,44 @@ if command -v pactl >/dev/null 2>&1 && [ -n "$PA_SOCK" ] && pactl info >/dev/nul
     seeed_sink=$(pactl list sinks short 2>/dev/null | grep -i 'seeed\|respeaker\|voice\|sound\|\.2\.' | awk '{print $2}' | head -n1)
     hdmi_sink=$(pactl list sinks short 2>/dev/null | grep -i 'hdmi\|vc4' | awk '{print $2}' | head -n1)
 
-    if [ -n "$HA_AUDIO_OUTPUT" ] && pactl list sinks short 2>/dev/null | grep -q "$HA_AUDIO_OUTPUT"; then
-        echo "Setting default audio sink to Home Assistant configured output: $HA_AUDIO_OUTPUT"
-        pactl set-default-sink "$HA_AUDIO_OUTPUT" 2>/dev/null || true
-    elif [ -n "$seeed_sink" ]; then
-        echo "Setting default audio sink to ReSpeaker / Voice card: $seeed_sink"
-        pactl set-default-sink "$seeed_sink" 2>/dev/null || true
+    TARGET_SINK=""
+    if [ "$OPT_AUDIO_OUTPUT" = "hdmi" ] && [ -n "$hdmi_sink" ]; then
+        TARGET_SINK="$hdmi_sink"
+    elif [ "$OPT_AUDIO_OUTPUT" = "respeaker" ] && [ -n "$seeed_sink" ]; then
+        TARGET_SINK="$seeed_sink"
+    elif [ -n "$HA_AUDIO_OUTPUT" ] && pactl list sinks short 2>/dev/null | grep -q "$HA_AUDIO_OUTPUT"; then
+        TARGET_SINK="$HA_AUDIO_OUTPUT"
     elif [ -n "$hdmi_sink" ]; then
-        echo "Setting default audio sink to HDMI: $hdmi_sink"
-        pactl set-default-sink "$hdmi_sink" 2>/dev/null || true
+        TARGET_SINK="$hdmi_sink"
+    elif [ -n "$seeed_sink" ]; then
+        TARGET_SINK="$seeed_sink"
+    fi
+
+    if [ -n "$TARGET_SINK" ]; then
+        echo "Setting default audio sink to: $TARGET_SINK"
+        pactl set-default-sink "$TARGET_SINK" 2>/dev/null || true
+        pactl set-sink-volume "$TARGET_SINK" "${OPT_AUDIO_VOLUME}%" 2>/dev/null || true
     fi
 
     # 6. Configure Default Audio Source (Microphone / Input)
     seeed_source=$(pactl list sources short 2>/dev/null | grep -i 'seeed\|respeaker\|voice\|sound\|\.2\.' | grep -v 'monitor' | awk '{print $2}' | head -n1)
-    if [ -n "$HA_AUDIO_INPUT" ] && pactl list sources short 2>/dev/null | grep -q "$HA_AUDIO_INPUT"; then
-        echo "Setting default audio source to Home Assistant configured input: $HA_AUDIO_INPUT"
-        pactl set-default-source "$HA_AUDIO_INPUT" 2>/dev/null || true
+    hdmi_source=$(pactl list sources short 2>/dev/null | grep -i 'hdmi\|vc4' | grep -v 'monitor' | awk '{print $2}' | head -n1)
+
+    TARGET_SOURCE=""
+    if [ "$OPT_AUDIO_INPUT" = "respeaker" ] && [ -n "$seeed_source" ]; then
+        TARGET_SOURCE="$seeed_source"
+    elif [ "$OPT_AUDIO_INPUT" = "hdmi" ] && [ -n "$hdmi_source" ]; then
+        TARGET_SOURCE="$hdmi_source"
+    elif [ -n "$HA_AUDIO_INPUT" ] && pactl list sources short 2>/dev/null | grep -q "$HA_AUDIO_INPUT"; then
+        TARGET_SOURCE="$HA_AUDIO_INPUT"
     elif [ -n "$seeed_source" ]; then
-        echo "Setting default audio source to microphone: $seeed_source"
-        pactl set-default-source "$seeed_source" 2>/dev/null || true
+        TARGET_SOURCE="$seeed_source"
+    fi
+
+    if [ -n "$TARGET_SOURCE" ]; then
+        echo "Setting default audio source to microphone: $TARGET_SOURCE"
+        pactl set-default-source "$TARGET_SOURCE" 2>/dev/null || true
+        pactl set-source-volume "$TARGET_SOURCE" 100% 2>/dev/null || true
     fi
 fi
 
