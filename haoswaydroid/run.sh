@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.35}"
+echo " Version: ${ADDON_VERSION:-1.0.36}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage
@@ -137,86 +137,87 @@ if command -v pactl >/dev/null 2>&1 && [ -n "$PA_SOCK" ] && pactl info >/dev/nul
     echo "Audio server status:"
     pactl info 2>/dev/null || echo "PulseAudio daemon active."
 
-    # Prevent HDMI audio crackle / 'crrg' and robotic distortion on Raspberry Pi 5 VC4 driver
-    # by using interrupt-based scheduling with tuned buffer fragments (tsched=no fragments=8 fragment_size=8192)
-    hdmi_card=$(pactl list cards short 2>/dev/null | grep -i 'vc4.*hdmi\|hdmi' | awk '{print $1}' | head -n1)
-    if [ -n "$hdmi_card" ]; then
-        mod_info=$(pactl list modules 2>/dev/null | grep -B 2 -A 8 "card_index=$hdmi_card" || true)
-        if echo "$mod_info" | grep -q "module-alsa-card" && { ! echo "$mod_info" | grep -q "tsched=0\|tsched=no" || ! echo "$mod_info" | grep -q "fragments=8"; }; then
-            mod_id=$(echo "$mod_info" | grep -o 'Module #[0-9]*' | head -n1 | cut -d'#' -f2)
-            if [ -n "$mod_id" ]; then
-                echo "Reloading VC4 HDMI module #$mod_id with tsched=no fragments=8 fragment_size=8192..."
-                card_name=$(pactl list cards 2>/dev/null | grep -A 5 "Card #$hdmi_card" | grep "Name:" | awk '{print $2}')
-                pactl unload-module "$mod_id" 2>/dev/null || true
-                sleep 0.5
-                pactl load-module module-alsa-card device_id="${card_name:-vc4-hdmi-0}" tsched=no fragments=8 fragment_size=8192 2>/dev/null || true
-            fi
+    # Robust card discovery and tuning for Raspberry Pi 5 VC4 HDMI and ReSpeaker / Seeed soundcards
+    # 1. Parse all cards from pactl list cards
+    eval "$(pactl list cards 2>/dev/null | awk '
+        /^Card #/ { cid = $2; sub(/#/, "", cid) }
+        /Owner Module:/ { mod = $3 }
+        /alsa.card =/ { gsub(/"/, "", $3); cnum = $3 }
+        /alsa.card_name =/ { gsub(/"/, "", $3); cname = $3 }
+        /alsa.driver_name =/ {
+            gsub(/"/, "", $3); cdriver = $3
+            if (cname ~ /vc4|hdmi/ || cdriver ~ /vc4/) {
+                print "HDMI_CARD_NUM=\"" cnum "\"; HDMI_MOD_ID=\"" mod "\"; HDMI_CARD_NAME=\"" cname "\";"
+            }
+            if (cname ~ /seeed|respeaker|voice|sound/ || cdriver ~ /simple_card/) {
+                print "SEEED_CARD_NUM=\"" cnum "\"; SEEED_MOD_ID=\"" mod "\"; SEEED_CARD_NAME=\"" cname "\";"
+            }
+        }
+    ')"
+
+    # 2. Tune VC4 HDMI card to prevent crackle and robotic distortion on Raspberry Pi 5 (tsched=no fragments=8 fragment_size=8192 rate=48000)
+    if [ -n "$HDMI_CARD_NUM" ] && [ -n "$HDMI_MOD_ID" ]; then
+        mod_info=$(pactl list modules 2>/dev/null | grep -B 2 -A 8 "card_index=$HDMI_CARD_NUM" || true)
+        if ! echo "$mod_info" | grep -q "tsched=0\|tsched=no" || ! echo "$mod_info" | grep -q "fragments=8"; then
+            echo "Tuning VC4 HDMI audio (card $HDMI_CARD_NUM, module $HDMI_MOD_ID) with tsched=no fragments=8 fragment_size=8192 rate=48000..."
+            pactl unload-module "$HDMI_MOD_ID" 2>/dev/null || true
+            sleep 0.5
+            pactl load-module module-alsa-card device_id="$HDMI_CARD_NUM" tsched=no fragments=8 fragment_size=8192 rate=48000 2>/dev/null || true
         fi
     fi
 
-    # Set default audio sink to HDMI if available
-    hdmi_sink=$(pactl list sinks short 2>/dev/null | grep -i 'hdmi' | awk '{print $2}' | head -n1)
-    if [ -n "$hdmi_sink" ]; then
+    # 3. Tune or load Seeed / ReSpeaker card with low-latency buffer (rate=48000 tsched_buffer_size=16384)
+    # If not yet discovered in PulseAudio, detect from ALSA /proc/asound/cards
+    if [ -z "$SEEED_CARD_NUM" ]; then
+        seeed_alsa_num=$(grep -i 'seeed\|respeaker\|voice' /proc/asound/cards 2>/dev/null | awk '{print $1}' | head -n1)
+        if [ -n "$seeed_alsa_num" ]; then
+            echo "Loading ReSpeaker card (ALSA card $seeed_alsa_num) into PulseAudio..."
+            pactl load-module module-alsa-card device_id="$seeed_alsa_num" rate=48000 tsched_buffer_size=16384 2>/dev/null || true
+        fi
+    elif [ -n "$SEEED_MOD_ID" ]; then
+        seeed_mod_args=$(pactl list modules 2>/dev/null | grep -A 4 "^Module #$SEEED_MOD_ID" | grep "Argument:" || true)
+        if ! echo "$seeed_mod_args" | grep -q "tsched_buffer_size"; then
+            echo "Tuning ReSpeaker card (card $SEEED_CARD_NUM, module $SEEED_MOD_ID) with rate=48000 tsched_buffer_size=16384..."
+            pactl unload-module "$SEEED_MOD_ID" 2>/dev/null || true
+            sleep 0.5
+            pactl load-module module-alsa-card device_id="$SEEED_CARD_NUM" rate=48000 tsched_buffer_size=16384 2>/dev/null || true
+        fi
+    fi
+
+    # 4. Retrieve configured audio preferences from Home Assistant Supervisor API if available
+    HA_AUDIO_OUTPUT=""
+    HA_AUDIO_INPUT=""
+    if [ -n "$SUPERVISOR_TOKEN" ]; then
+        ha_audio_json=$(curl -s -m 4 -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/self/info 2>/dev/null || true)
+        if [ -n "$ha_audio_json" ]; then
+            HA_AUDIO_OUTPUT=$(echo "$ha_audio_json" | jq -r '.data.audio_output // empty' 2>/dev/null || true)
+            HA_AUDIO_INPUT=$(echo "$ha_audio_json" | jq -r '.data.audio_input // empty' 2>/dev/null || true)
+        fi
+    fi
+
+    # 5. Configure Default Audio Sink (Speaker / Output)
+    seeed_sink=$(pactl list sinks short 2>/dev/null | grep -i 'seeed\|respeaker\|voice\|sound\|\.2\.' | awk '{print $2}' | head -n1)
+    hdmi_sink=$(pactl list sinks short 2>/dev/null | grep -i 'hdmi\|vc4' | awk '{print $2}' | head -n1)
+
+    if [ -n "$HA_AUDIO_OUTPUT" ] && pactl list sinks short 2>/dev/null | grep -q "$HA_AUDIO_OUTPUT"; then
+        echo "Setting default audio sink to Home Assistant configured output: $HA_AUDIO_OUTPUT"
+        pactl set-default-sink "$HA_AUDIO_OUTPUT" 2>/dev/null || true
+    elif [ -n "$seeed_sink" ]; then
+        echo "Setting default audio sink to ReSpeaker / Voice card: $seeed_sink"
+        pactl set-default-sink "$seeed_sink" 2>/dev/null || true
+    elif [ -n "$hdmi_sink" ]; then
         echo "Setting default audio sink to HDMI: $hdmi_sink"
         pactl set-default-sink "$hdmi_sink" 2>/dev/null || true
     fi
 
-    # Set default audio source to Seeed ReSpeaker / microphone if available
-    seeed_source=$(pactl list sources short 2>/dev/null | grep -i 'seeed\|respeaker\|voice\|sound' | grep -v 'monitor' | awk '{print $2}' | head -n1)
-    if [ -n "$seeed_source" ]; then
+    # 6. Configure Default Audio Source (Microphone / Input)
+    seeed_source=$(pactl list sources short 2>/dev/null | grep -i 'seeed\|respeaker\|voice\|sound\|\.2\.' | grep -v 'monitor' | awk '{print $2}' | head -n1)
+    if [ -n "$HA_AUDIO_INPUT" ] && pactl list sources short 2>/dev/null | grep -q "$HA_AUDIO_INPUT"; then
+        echo "Setting default audio source to Home Assistant configured input: $HA_AUDIO_INPUT"
+        pactl set-default-source "$HA_AUDIO_INPUT" 2>/dev/null || true
+    elif [ -n "$seeed_source" ]; then
         echo "Setting default audio source to microphone: $seeed_source"
         pactl set-default-source "$seeed_source" 2>/dev/null || true
-    fi
-
-    # Force the ReSpeaker microphone card to run at its NATIVE 16 kHz.
-    #
-    # The seeed2micvoicec card is a combined play/record codec whose DSP runs
-    # at 16 kHz. Left at the PulseAudio default (44.1 kHz) every consumer
-    # (Waydroid and Home Assistant's voice assistant both request 16 kHz) is
-    # served by resampling 44.1 -> 16 kHz, which is what makes the wake word
-    # and voice recognition unreliable. Pinning the card to 16 kHz means no
-    # resampling anywhere on the capture path.
-    #
-    # Idempotent: does nothing when the source is already at the target rate.
-    # Never fatal: any failure leaves the current state untouched.
-    mic_native_rate() {
-        pactl list sources 2>/dev/null | awk '
-            /^\tName: alsa_input/ { found = 1; next }
-            found && /Sample Specification:/ {
-                for (i = 1; i <= NF; i++)
-                    if ($i ~ /Hz$/) { gsub("Hz", "", $i); print $i; exit }
-                exit
-            }'
-    }
-
-    _mic_rate=$(mic_native_rate)
-    if [ -n "$_mic_rate" ] && [ "$_mic_rate" != "16000" ]; then
-        _card_name=$(pactl list sources 2>/dev/null | awk '/^\tName: alsa_input/{print $2; exit}' | sed 's/^alsa_input\.//; s/\..*$//')
-        _mod_id=$(pactl list modules 2>/dev/null | awk -v c="$_card_name" '
-            /^Module #/ { id = $2; sub(/#/, "", id) }
-            /module-alsa-card/ { inblk = 1; next }
-            inblk && /Argument:/ { if (index($0, c)) { print id; exit } }')
-        if [ -n "$_mod_id" ] && [ -n "$_card_name" ]; then
-            echo "Microphone card is at ${_mic_rate} Hz; reloading at native 16000 Hz (module $_mod_id)..."
-            pactl unload-module "$_mod_id" >/dev/null 2>&1
-            sleep 2
-            pactl load-module module-alsa-card device_id=0 "name=${_card_name}" \
-                "card_name=alsa_card.${_card_name}" namereg_fail=false tsched=yes \
-                ignore_dB=no use_ucm=yes avoid_resampling=no rate=16000 >/dev/null 2>&1
-            sleep 2
-            _new_rate=$(mic_native_rate)
-            if [ "$_new_rate" = "16000" ]; then
-                echo "Microphone now running at native 16000 Hz - no resampling on the capture path."
-                seeed_source=$(pactl list sources short 2>/dev/null | grep -v monitor | awk '{print $2}' | head -n1)
-                [ -n "$seeed_source" ] && pactl set-default-source "$seeed_source" 2>/dev/null || true
-            else
-                echo "WARNING: microphone is at ${_new_rate:-unknown} Hz, expected 16000."
-            fi
-        else
-            echo "WARNING: could not identify the microphone ALSA module; leaving it untouched."
-        fi
-    elif [ "$_mic_rate" = "16000" ]; then
-        echo "Microphone already at native 16000 Hz - nothing to do."
     fi
 fi
 

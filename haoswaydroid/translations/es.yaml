@@ -35,6 +35,12 @@ configuration:
   enable_camera:
     name: "Habilitar Cámara"
     description: "Permitir a Kiosk Satellite acceso a cámaras para gestos y transmisión de video."
+  audio_output_device:
+    name: "Dispositivo de salida de audio"
+    description: "Salida de audio preferida: 'auto' (respeta la selección de Home Assistant o prefiere ReSpeaker), 'hdmi' (fuerza salida HDMI de la pantalla) o 'respeaker' (fuerza altavoz/jack de ReSpeaker)."
+  audio_input_device:
+    name: "Dispositivo de entrada de audio"
+    description: "Micrófono de entrada preferido: 'auto' (respeta la selección de Home Assistant o prefiere micro ReSpeaker), 'respeaker' (fuerza micrófono ReSpeaker) o 'default'."
   audio_volume:
     name: "Volumen de Audio"
     description: "Nivel de volumen de salida de audio (0 a 100)."

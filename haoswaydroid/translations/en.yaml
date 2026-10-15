@@ -35,6 +35,12 @@ configuration:
   enable_camera:
     name: "Enable Camera"
     description: "Allow Kiosk Satellite access to video input/webcams for gestures and streaming."
+  audio_output_device:
+    name: "Audio Output Device"
+    description: "Preferred audio output sink: 'auto' (respect Home Assistant selection or prefer ReSpeaker), 'hdmi' (force HDMI display output), or 'respeaker' (force ReSpeaker / analog speaker)."
+  audio_input_device:
+    name: "Audio Input Device"
+    description: "Preferred microphone input source: 'auto' (respect Home Assistant selection or prefer ReSpeaker mic), 'respeaker' (force ReSpeaker microphone), or 'default'."
   audio_volume:
     name: "Audio Volume"
     description: "Default output audio volume level (0 to 100)."

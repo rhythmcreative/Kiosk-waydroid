@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.36
+- Fix: **Corrección crítica de la tarjeta de sonido ReSpeaker / Seeed en PulseAudio.** En versiones anteriores el script descargaba el módulo de la tarjeta con `device_id=0` hardcodeado (perteneciente a HDMI), haciendo que PulseAudio fallara al recargarla y dejando el sistema sin micrófono físico y sin salida analógica/jack. Ahora se usa el número de tarjeta ALSA dinámico real (`device_id=$alsa_card`).
+- Fix: **Latencia del buffer de ReSpeaker reducida de ~2.000 ms a 85 ms.** El driver ALSA de `seeed2micvoicec` solicitaba un buffer de ~96.000 frames (casi 2 segundos) que causaba cortes, tartamudeos y retrasos en sonidos cortos y TTS. Al configurarse con `rate=48000 tsched_buffer_size=16384`, la latencia de buffer se reduce a ~85 ms con reproducción instantánea y nítida.
+- Fix: **Eliminación definitiva de chasquidos y voz robótica en Raspberry Pi 5 VC4 HDMI.** La comprobación previa para recargar el módulo HDMI con `tsched=no fragments=8 fragment_size=8192 rate=48000` nunca se ejecutaba debido a discrepancias en el texto devuelto por `pactl`. Con el nuevo parser estructural de tarjetas, el tuning para evitar el bug de `POLLOUT` / desbordamiento del driver `vc4` se aplica de forma confiable.
+- Fix: **Respeto a la salida y entrada de audio configuradas en Home Assistant.** Ya no se fuerza siempre la salida a HDMI; el add-on consulta la API del Supervisor (`audio_output` y `audio_input`) y respeta el dispositivo configurado por el usuario. Nuevas opciones configurables `audio_output_device` y `audio_input_device` (`auto`, `hdmi`, `respeaker`).
+- Fix: **Permiso AppOp `RECORD_AUDIO` en Android.** Se asegura la concesión explícita de `appops set me.jxl.kiosk_satellite RECORD_AUDIO allow` para prevenir que Android bloquee internamente la captura de audio en Kiosk Satellite.
+
 ## 1.0.35
 - Fix: **HA ahora sí descubre el kiosk (mDNS).** Aunque el TCP 6053 estuviera redirigido, el mDNS `_esphomelib._tcp` nace dentro del NAT de Waydroid y jamás llega a la LAN, así que nunca aparecía como Descubierto. El add-on ahora re-publica el servicio desde el host con `avahi-publish-service` (nueva imagen con `avahi-daemon`/`avahi-utils`), apuntando al puerto host redirigido. Nuevas opciones `esphome_advertise` (bool, default true) y `esphome_node_name` (default `ks-waydroid`, idealmente igual al Node name de la app y único por kiosco). Supervisado en watchdog + estado en `[diag] mdns`.
 - Nota: requiere rebuild de imagen por el Dockerfile. Hasta que se reconstruya, el forward TCP + añadido manual siguen funcionando sin mDNS.

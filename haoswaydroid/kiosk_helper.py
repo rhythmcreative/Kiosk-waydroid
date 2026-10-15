@@ -284,8 +284,9 @@ def grant_permissions():
     for perm in permissions:
         run_cmd(["waydroid", "shell", "pm", "grant", PACKAGE_NAME, perm])
     
-    # Grant appops for alert window
+    # Grant appops for alert window and microphone capture
     run_cmd(["waydroid", "shell", "appops", "set", PACKAGE_NAME, "SYSTEM_ALERT_WINDOW", "allow"])
+    run_cmd(["waydroid", "shell", "appops", "set", PACKAGE_NAME, "RECORD_AUDIO", "allow"])
 
     # Disable battery optimization
     run_cmd(["waydroid", "shell", "dumpsys", "deviceidle", "whitelist", f"+{PACKAGE_NAME}"])
@@ -318,64 +319,159 @@ def configure_pulseaudio_routing(options):
 
     logger.info("Configuring PulseAudio routing (HDMI output & Seeed microphone input)...")
 
-    # 2. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with tsched=no and tuned buffer fragments
+    # 2. Structural parse of cards from pactl list cards
+    cards = []
+    current = {}
     rc_c, cards_out, _ = run_cmd(["pactl", "list", "cards"], env=pulse_env)
-    if rc_c == 0 and ("vc4" in cards_out.lower() or "hdmi" in cards_out.lower()):
-        rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
-        if rc_m == 0:
-            modules = mods_out.split("Module #")
-            for mod in modules[1:]:
-                lines = mod.strip().split("\n")
-                mod_id = lines[0].strip()
-                mod_text = mod.lower()
-                if "module-alsa-card" in mod_text and ("vc4" in mod_text or "hdmi" in mod_text):
-                    needs_reload = ("tsched=no" not in mod_text and "tsched=0" not in mod_text) or ("fragments=8" not in mod_text)
-                    if needs_reload:
-                        logger.info(f"VC4 HDMI module #{mod_id} needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192...")
-                        m = re.search(r'device_id="([^"]+)"', mod) or re.search(r'card_name="([^"]+)"', mod)
-                        dev_id = m.group(1) if m else "vc4-hdmi-0"
-                        run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
-                        time.sleep(0.5)
-                        run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={dev_id}", "tsched=no", "fragments=8", "fragment_size=8192"], env=pulse_env)
+    if rc_c == 0:
+        for line in cards_out.splitlines():
+            if line.startswith("Card #"):
+                if current:
+                    cards.append(current)
+                current = {"id": line.split()[1]}
+            elif "Owner Module:" in line:
+                current["owner_module"] = line.split(":")[1].strip()
+            elif "alsa.card =" in line:
+                current["alsa_card"] = line.split("=")[1].strip().strip('"')
+            elif "alsa.card_name =" in line:
+                current["alsa_name"] = line.split("=")[1].strip().strip('"')
+            elif "alsa.driver_name =" in line:
+                current["alsa_driver"] = line.split("=")[1].strip().strip('"')
+        if current:
+            cards.append(current)
+
+    rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
+
+    # 3. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with tsched=no and tuned buffer fragments
+    for c in cards:
+        cname = (c.get("alsa_name") or "").lower()
+        cdrv = (c.get("alsa_driver") or "").lower()
+        if "vc4" in cname or "hdmi" in cname or "vc4" in cdrv:
+            mod_id = c.get("owner_module")
+            alsa_card = c.get("alsa_card") or "0"
+            mod_block = ""
+            if rc_m == 0 and mod_id:
+                for block in mods_out.split("Module #"):
+                    if block.strip().startswith(mod_id):
+                        mod_block = block.lower()
                         break
+            needs_reload = ("tsched=no" not in mod_block and "tsched=0" not in mod_block) or ("fragments=8" not in mod_block)
+            if needs_reload and mod_id:
+                logger.info(f"VC4 HDMI (card {alsa_card}, module #{mod_id}) needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192 rate=48000...")
+                run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
+                time.sleep(0.5)
+                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "tsched=no", "fragments=8", "fragment_size=8192", "rate=48000"], env=pulse_env)
+            break
 
-    # 3. Set default sink to HDMI
+    # 4. Tune or load Seeed / ReSpeaker card with low-latency buffer (rate=48000 tsched_buffer_size=16384)
+    seeed_found = False
+    for c in cards:
+        cname = (c.get("alsa_name") or "").lower()
+        cdrv = (c.get("alsa_driver") or "").lower()
+        if any(k in cname for k in ["seeed", "respeaker", "voice", "sound"]) or "simple_card" in cdrv:
+            seeed_found = True
+            mod_id = c.get("owner_module")
+            alsa_card = c.get("alsa_card") or "2"
+            mod_block = ""
+            if rc_m == 0 and mod_id:
+                for block in mods_out.split("Module #"):
+                    if block.strip().startswith(mod_id):
+                        mod_block = block.lower()
+                        break
+            if "tsched_buffer_size" not in mod_block and mod_id:
+                logger.info(f"ReSpeaker card (card {alsa_card}, module #{mod_id}) needs low-latency buffer; reloading with rate=48000 tsched_buffer_size=16384...")
+                run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
+                time.sleep(0.5)
+                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "rate=48000", "tsched_buffer_size=16384"], env=pulse_env)
+            break
+
+    if not seeed_found:
+        try:
+            if os.path.exists("/proc/asound/cards"):
+                with open("/proc/asound/cards", "r") as f:
+                    for line in f:
+                        if any(k in line.lower() for k in ["seeed", "respeaker", "voice"]):
+                            parts = line.split()
+                            if parts and parts[0].isdigit():
+                                c_idx = parts[0]
+                                logger.info(f"Loading ReSpeaker card (ALSA card {c_idx}) into PulseAudio with rate=48000 tsched_buffer_size=16384...")
+                                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={c_idx}", "rate=48000", "tsched_buffer_size=16384"], env=pulse_env)
+                                break
+        except Exception as e:
+            logger.debug(f"Notice inspecting /proc/asound/cards: {e}")
+
+    # 5. Determine preferred sink and source from options and Home Assistant Supervisor API
+    sink_pref = options.get("audio_output_device", "auto")
+    source_pref = options.get("audio_input_device", "auto")
+
+    ha_sink = ""
+    ha_source = ""
+    token = os.environ.get("SUPERVISOR_TOKEN", "")
+    if token:
+        try:
+            req = urllib.request.Request("http://supervisor/addons/self/info", headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode())
+                ha_sink = data.get("data", {}).get("audio_output") or ""
+                ha_source = data.get("data", {}).get("audio_input") or ""
+        except Exception:
+            pass
+
     rc_s, sinks_out, _ = run_cmd(["pactl", "list", "sinks", "short"], env=pulse_env)
-    if rc_s == 0:
-        hdmi_sinks = [
-            line.split()[1] for line in sinks_out.splitlines()
-            if len(line.split()) >= 2 and ("hdmi" in line.lower() or "vc4" in line.lower())
-        ]
-        if hdmi_sinks:
-            hdmi_sink = hdmi_sinks[0]
-            logger.info(f"Setting default audio sink to HDMI: {hdmi_sink}")
-            run_cmd(["pactl", "set-default-sink", hdmi_sink], env=pulse_env)
-            # Move active playback streams to HDMI sink
-            rc_si, si_out, _ = run_cmd(["pactl", "list", "sink-inputs", "short"], env=pulse_env)
-            if rc_si == 0 and si_out.strip():
-                for line in si_out.splitlines():
-                    parts = line.split()
-                    if parts:
-                        run_cmd(["pactl", "move-sink-input", parts[0], hdmi_sink], env=pulse_env)
+    all_sinks = [line.split()[1] for line in sinks_out.splitlines() if len(line.split()) >= 2] if rc_s == 0 else []
 
-    # 4. Set default source to Seeed ReSpeaker / microphone
+    target_sink = None
+    if sink_pref == "hdmi":
+        target_sink = next((s for s in all_sinks if "hdmi" in s.lower() or "vc4" in s.lower()), None)
+    elif sink_pref == "respeaker":
+        target_sink = next((s for s in all_sinks if any(k in s.lower() for k in ["seeed", "voice", "respeaker", "sound", ".2."])), None)
+    elif sink_pref == "auto":
+        if ha_sink and ha_sink in all_sinks:
+            target_sink = ha_sink
+        else:
+            # Prefer ReSpeaker / Voice card if available, else HDMI
+            target_sink = next((s for s in all_sinks if any(k in s.lower() for k in ["seeed", "voice", "respeaker", "sound", ".2."])), None)
+            if not target_sink:
+                target_sink = next((s for s in all_sinks if "hdmi" in s.lower() or "vc4" in s.lower()), None)
+
+    if target_sink:
+        logger.info(f"Setting default audio sink to: {target_sink}")
+        run_cmd(["pactl", "set-default-sink", target_sink], env=pulse_env)
+        # Move active playback streams to target sink
+        rc_si, si_out, _ = run_cmd(["pactl", "list", "sink-inputs", "short"], env=pulse_env)
+        if rc_si == 0 and si_out.strip():
+            for line in si_out.splitlines():
+                parts = line.split()
+                if parts:
+                    run_cmd(["pactl", "move-sink-input", parts[0], target_sink], env=pulse_env)
+
+    # 6. Set default source (microphone)
     rc_src, sources_out, _ = run_cmd(["pactl", "list", "sources", "short"], env=pulse_env)
-    if rc_src == 0:
-        mic_sources = [
-            line.split()[1] for line in sources_out.splitlines()
-            if len(line.split()) >= 2 and any(k in line.lower() for k in ["seeed", "voice", "respeaker", "sound"]) and "monitor" not in line.lower()
-        ]
-        if mic_sources:
-            mic_source = mic_sources[0]
-            logger.info(f"Setting default audio source to microphone: {mic_source}")
-            run_cmd(["pactl", "set-default-source", mic_source], env=pulse_env)
-            # Move active recording streams to Seeed mic
-            rc_so, so_out, _ = run_cmd(["pactl", "list", "source-outputs", "short"], env=pulse_env)
-            if rc_so == 0 and so_out.strip():
-                for line in so_out.splitlines():
-                    parts = line.split()
-                    if parts:
-                        run_cmd(["pactl", "move-source-output", parts[0], mic_source], env=pulse_env)
+    all_sources = [line.split()[1] for line in sources_out.splitlines() if len(line.split()) >= 2 and "monitor" not in line.lower()] if rc_src == 0 else []
+
+    target_source = None
+    if source_pref == "respeaker":
+        target_source = next((s for s in all_sources if any(k in s.lower() for k in ["seeed", "voice", "respeaker", "sound", ".2."])), None)
+    elif source_pref == "default":
+        target_source = all_sources[0] if all_sources else None
+    elif source_pref == "auto":
+        if ha_source and ha_source in all_sources:
+            target_source = ha_source
+        else:
+            target_source = next((s for s in all_sources if any(k in s.lower() for k in ["seeed", "voice", "respeaker", "sound", ".2."])), None)
+            if not target_source and all_sources:
+                target_source = all_sources[0]
+
+    if target_source:
+        logger.info(f"Setting default audio source to microphone: {target_source}")
+        run_cmd(["pactl", "set-default-source", target_source], env=pulse_env)
+        # Move active recording streams to target source
+        rc_so, so_out, _ = run_cmd(["pactl", "list", "source-outputs", "short"], env=pulse_env)
+        if rc_so == 0 and so_out.strip():
+            for line in so_out.splitlines():
+                parts = line.split()
+                if parts:
+                    run_cmd(["pactl", "move-source-output", parts[0], target_source], env=pulse_env)
 
     # 5. Apply volume setting to PulseAudio and Android
     vol = options.get("audio_volume", 100)
