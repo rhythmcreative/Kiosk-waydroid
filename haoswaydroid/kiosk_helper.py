@@ -340,65 +340,7 @@ def configure_pulseaudio_routing(options):
         if current:
             cards.append(current)
 
-    rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
-
-    # 3. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with tsched=no fragments=8 fragment_size=8192 rate=48000
-    for c in cards:
-        cname = (c.get("alsa_name") or "").lower()
-        cdrv = (c.get("alsa_driver") or "").lower()
-        if "vc4" in cname or "hdmi" in cname or "vc4" in cdrv:
-            mod_id = c.get("owner_module")
-            alsa_card = c.get("alsa_card") or "0"
-            mod_block = ""
-            if rc_m == 0 and mod_id:
-                for block in mods_out.split("Module #"):
-                    if block.strip().startswith(mod_id):
-                        mod_block = block.lower()
-                        break
-            needs_reload = ("tsched=no" not in mod_block and "tsched=0" not in mod_block) or ("fragments=8" not in mod_block) or ("rate=48000" not in mod_block)
-            if needs_reload and mod_id:
-                logger.info(f"VC4 HDMI (card {alsa_card}, module #{mod_id}) needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192 rate=48000...")
-                run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
-                time.sleep(0.5)
-                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "tsched=no", "fragments=8", "fragment_size=8192", "rate=48000"], env=pulse_env)
-            break
-
-    # 4. Tune or load Seeed / ReSpeaker card at native 16 kHz DSP capture rate (eliminates speex resampling and voice drops)
-    seeed_found = False
-    for c in cards:
-        cname = (c.get("alsa_name") or "").lower()
-        cdrv = (c.get("alsa_driver") or "").lower()
-        if any(k in cname for k in ["seeed", "respeaker", "voice", "sound"]) or "simple_card" in cdrv:
-            seeed_found = True
-            mod_id = c.get("owner_module")
-            alsa_card = c.get("alsa_card") or "2"
-            mod_block = ""
-            if rc_m == 0 and mod_id:
-                for block in mods_out.split("Module #"):
-                    if block.strip().startswith(mod_id):
-                        mod_block = block.lower()
-                        break
-            if "rate=16000" not in mod_block and mod_id:
-                logger.info(f"ReSpeaker card (card {alsa_card}, module #{mod_id}) needs native 16000 Hz; reloading with rate=16000 tsched=yes...")
-                run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
-                time.sleep(0.5)
-                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "rate=16000", "tsched=yes"], env=pulse_env)
-            break
-
-    if not seeed_found:
-        try:
-            if os.path.exists("/proc/asound/cards"):
-                with open("/proc/asound/cards", "r") as f:
-                    for line in f:
-                        if any(k in line.lower() for k in ["seeed", "respeaker", "voice"]):
-                            parts = line.split()
-                            if parts and parts[0].isdigit():
-                                c_idx = parts[0]
-                                logger.info(f"Loading ReSpeaker card (ALSA card {c_idx}) into PulseAudio with native rate=16000 tsched=yes...")
-                                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={c_idx}", "rate=16000", "tsched=yes"], env=pulse_env)
-                                break
-        except Exception as e:
-            logger.debug(f"Notice inspecting /proc/asound/cards: {e}")
+    logger.info("Using native PulseAudio sound cards and drivers...")
 
     # 5. Determine preferred sink and source from options and Home Assistant Supervisor API
     sink_pref = options.get("audio_output_device", "auto")

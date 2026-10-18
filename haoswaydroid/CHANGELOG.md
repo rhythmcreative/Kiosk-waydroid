@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.41
+- Fix: **Preserve 100% native Home Assistant OS audio drivers and devices.**
+  - **Zero manual module unloading/reloading:** Eliminates manual `module-alsa-card` reloading (`tsched=no`, custom fragment sizes), allowing PulseAudio to run with Home Assistant OS's native `module-udev-detect` drivers. Restores native jitter-free audio and crystal-clear voice playback on Raspberry Pi 5 without ALSA timing conflicts.
+
 ## 1.0.40
 - Fix: **Prevent chime audio cutoffs & ensure high-fidelity microphone capture.**
   - **Auto-tune Kiosk Satellite audio capture:** Automatically configures `mic_capture_mode` to `voice_recognition` instead of telephony bandpass filtering (`voice_communication`), restoring full high/low frequency fidelity to recorded audio.
