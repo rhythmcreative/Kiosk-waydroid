@@ -934,7 +934,19 @@ def provision_android():
     run_cmd(["waydroid", "shell", "-u", "2000", "--", "wm", "dismiss-keyguard"])
     run_cmd(["waydroid", "shell", "-u", "2000", "--", "input", "keyevent", "KEYCODE_WAKEUP"])
 
+def tune_kiosk_satellite_audio_preferences():
+    """Ensure Kiosk Satellite uses high-fidelity microphone capture (voice_recognition) and avoids false stops."""
+    script = (
+        "PREF=/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml\n"
+        "if [ -f \"$PREF\" ]; then\n"
+        "  sed -i 's/<string name=\"flutter.ks.audio.mic_capture_mode\">voice_communication<\\/string>/<string name=\"flutter.ks.audio.mic_capture_mode\">voice_recognition<\\/string>/g' \"$PREF\"\n"
+        "  sed -i 's/<boolean name=\"flutter.ks.voice.stop_word\" value=\"true\" \\/>/<boolean name=\"flutter.ks.voice.stop_word\" value=\"false\" \\/>/g' \"$PREF\"\n"
+        "fi\n"
+    )
+    run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c", script])
+
 def launch_app():
+    tune_kiosk_satellite_audio_preferences()
     logger.info(f"Launching {PACKAGE_NAME}...")
     run_cmd(["waydroid", "shell", "-u", "2000", "--", "wm", "dismiss-keyguard"])
     run_cmd(["waydroid", "shell", "-u", "2000", "--", "input", "keyevent", "KEYCODE_WAKEUP"])

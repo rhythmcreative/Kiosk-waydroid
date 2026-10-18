@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.40
+- Fix: **Prevent chime audio cutoffs & ensure high-fidelity microphone capture.**
+  - **Auto-tune Kiosk Satellite audio capture:** Automatically configures `mic_capture_mode` to `voice_recognition` instead of telephony bandpass filtering (`voice_communication`), restoring full high/low frequency fidelity to recorded audio.
+  - **Acoustic feedback stop protection:** Sets `stop_word` to false in Kiosk Satellite preferences to eliminate false voice interrupts triggered by display speaker feedback.
+
 ## 1.0.39
 - Fix: **Restore clean and crisp HDMI playback on Raspberry Pi 5 (`vc4-hdmi`).**
   - **Fixed interrupt-driven buffer (`tsched=no fragments=8 fragment_size=8192 rate=48000`):** Reverting `tsched=yes` back to hardware interrupt scheduling eliminates the massive 1.36s buffer desync on Raspberry Pi 5. Audio buffer latency is reduced to an exact 341 ms, completely eliminating Android `AudioFlinger` buffer timeouts (`BUFFER TIMEOUT`) and frame drops that caused speech, TTS, and UI sounds to sound distorted, crackly, or get truncated.
