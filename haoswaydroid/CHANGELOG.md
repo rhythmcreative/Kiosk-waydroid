@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.39
+- Fix: **Restore clean and crisp HDMI playback on Raspberry Pi 5 (`vc4-hdmi`).**
+  - **Fixed interrupt-driven buffer (`tsched=no fragments=8 fragment_size=8192 rate=48000`):** Reverting `tsched=yes` back to hardware interrupt scheduling eliminates the massive 1.36s buffer desync on Raspberry Pi 5. Audio buffer latency is reduced to an exact 341 ms, completely eliminating Android `AudioFlinger` buffer timeouts (`BUFFER TIMEOUT`) and frame drops that caused speech, TTS, and UI sounds to sound distorted, crackly, or get truncated.
+  - **Default volume calibrated to 80%:** Prevents amplifier clipping and harmonic distortion on compact kiosk displays (e.g. MPI7002 7-inch LCDs) across both `run.sh` and `kiosk_helper.py`.
+
 ## 1.0.38
 - Fix: **Eliminate speech cutoffs & resolve Raspberry Pi 5 HDMI audio underruns.**
   - **Native 16 kHz microphone capture without resampling:** The ReSpeaker / Seeed microphone card (`seeed2micvoicec`) operates natively at 16 kHz in its DSP. Previous versions incorrectly forced 48 kHz, requiring real-time software resampling (`speex-float-1`) for both Waydroid and Assist Satellite. This accumulated buffer drift and packet dropouts, causing Home Assistant's Voice Activity Detection (VAD) to cut off user speech mid-sentence. Pinning the card to native 16 kHz (`rate=16000`) enables direct `copy` passthrough with 0 µs buffer latency.

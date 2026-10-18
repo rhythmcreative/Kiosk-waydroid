@@ -342,7 +342,7 @@ def configure_pulseaudio_routing(options):
 
     rc_m, mods_out, _ = run_cmd(["pactl", "list", "modules"], env=pulse_env)
 
-    # 3. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with rate=48000 tsched=yes
+    # 3. Fix VC4 HDMI crackle / 'crrg' and robotic sound by reloading module-alsa-card with tsched=no fragments=8 fragment_size=8192 rate=48000
     for c in cards:
         cname = (c.get("alsa_name") or "").lower()
         cdrv = (c.get("alsa_driver") or "").lower()
@@ -355,12 +355,12 @@ def configure_pulseaudio_routing(options):
                     if block.strip().startswith(mod_id):
                         mod_block = block.lower()
                         break
-            needs_reload = "rate=48000" not in mod_block
+            needs_reload = ("tsched=no" not in mod_block and "tsched=0" not in mod_block) or ("fragments=8" not in mod_block) or ("rate=48000" not in mod_block)
             if needs_reload and mod_id:
-                logger.info(f"VC4 HDMI (card {alsa_card}, module #{mod_id}) needs rate=48000; reloading with rate=48000 tsched=yes...")
+                logger.info(f"VC4 HDMI (card {alsa_card}, module #{mod_id}) needs buffer tuning; reloading with tsched=no fragments=8 fragment_size=8192 rate=48000...")
                 run_cmd(["pactl", "unload-module", mod_id], env=pulse_env)
                 time.sleep(0.5)
-                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "rate=48000", "tsched=yes"], env=pulse_env)
+                run_cmd(["pactl", "load-module", "module-alsa-card", f"device_id={alsa_card}", "tsched=no", "fragments=8", "fragment_size=8192", "rate=48000"], env=pulse_env)
             break
 
     # 4. Tune or load Seeed / ReSpeaker card at native 16 kHz DSP capture rate (eliminates speex resampling and voice drops)
@@ -474,7 +474,7 @@ def configure_pulseaudio_routing(options):
                     run_cmd(["pactl", "move-source-output", parts[0], target_source], env=pulse_env)
 
     # 5. Apply volume setting to PulseAudio and Android
-    vol = options.get("audio_volume", 100)
+    vol = options.get("audio_volume", 80)
     try:
         run_cmd(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], env=pulse_env)
         run_cmd(["pactl", "set-source-volume", "@DEFAULT_SOURCE@", "100%"], env=pulse_env)

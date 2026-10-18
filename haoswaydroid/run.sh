@@ -160,14 +160,15 @@ if command -v pactl >/dev/null 2>&1 && [ -n "$PA_SOCK" ] && pactl info >/dev/nul
     OPT_AUDIO_INPUT=$(jq -r '.audio_input_device // "auto"' /data/options.json 2>/dev/null || echo "auto")
     OPT_AUDIO_VOLUME=$(jq -r '.audio_volume // 80' /data/options.json 2>/dev/null || echo "80")
 
-    # 2. Tune VC4 HDMI card for clean 48 kHz playback with timer-based scheduling
+    # 2. Tune VC4 HDMI card for clean 48 kHz playback with fixed interrupt-driven buffer
+    # Eliminates VC4 HDMI buffer underruns, crackle, robotic sound, and Android AudioFlinger buffer timeouts
     if [ -n "$HDMI_CARD_NUM" ] && [ -n "$HDMI_MOD_ID" ]; then
         mod_info=$(pactl list modules 2>/dev/null | grep -B 2 -A 8 "card_index=$HDMI_CARD_NUM" || true)
-        if ! echo "$mod_info" | grep -q "rate=48000"; then
-            echo "Tuning VC4 HDMI audio (card $HDMI_CARD_NUM, module $HDMI_MOD_ID) with rate=48000 tsched=yes..."
+        if ! echo "$mod_info" | grep -q "tsched=0\|tsched=no" || ! echo "$mod_info" | grep -q "fragments=8" || ! echo "$mod_info" | grep -q "rate=48000"; then
+            echo "Tuning VC4 HDMI audio (card $HDMI_CARD_NUM, module $HDMI_MOD_ID) with tsched=no fragments=8 fragment_size=8192 rate=48000..."
             pactl unload-module "$HDMI_MOD_ID" 2>/dev/null || true
             sleep 0.5
-            pactl load-module module-alsa-card device_id="$HDMI_CARD_NUM" rate=48000 tsched=yes 2>/dev/null || true
+            pactl load-module module-alsa-card device_id="$HDMI_CARD_NUM" tsched=no fragments=8 fragment_size=8192 rate=48000 2>/dev/null || true
         fi
     fi
 
