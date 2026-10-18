@@ -2,7 +2,7 @@
 
 echo "=========================================================="
 echo " Starting Waydroid Kiosk Satellite Add-on"
-echo " Version: ${ADDON_VERSION:-1.0.36}"
+echo " Version: ${ADDON_VERSION:-1.0.42}"
 echo "=========================================================="
 
 # 1. Setup Persistent Storage

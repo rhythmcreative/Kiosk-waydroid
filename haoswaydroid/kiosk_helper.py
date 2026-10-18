@@ -13,6 +13,7 @@ import time
 import urllib.request
 import logging
 import re
+import xml.etree.ElementTree as ET
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("kiosk_helper")
@@ -415,7 +416,16 @@ def configure_pulseaudio_routing(options):
                 if parts:
                     run_cmd(["pactl", "move-source-output", parts[0], target_source], env=pulse_env)
 
-    # 5. Apply volume setting to PulseAudio and Android
+    # 7. Hardware ALSA gain calibration for Seeed 2-Mic voice card
+    # Default ALSA PGA gain is 60 (+30 dB, almost silent); 105 clips; 85 (+42.5 dB) provides optimal SNR.
+    try:
+        run_cmd(["amixer", "-c", "seeed2micvoicec", "sset", "PGA", "85"], env=pulse_env)
+        run_cmd(["amixer", "-c", "seeed2micvoicec", "sset", "Left PGA Mixer Line1L", "on"], env=pulse_env)
+        run_cmd(["amixer", "-c", "seeed2micvoicec", "sset", "Right PGA Mixer Line1R", "on"], env=pulse_env)
+    except Exception as e:
+        logger.debug(f"ALSA Seeed mixer adjustment notice: {e}")
+
+    # 8. Apply volume setting to PulseAudio and Android
     vol = options.get("audio_volume", 80)
     try:
         run_cmd(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], env=pulse_env)
@@ -877,15 +887,105 @@ def provision_android():
     run_cmd(["waydroid", "shell", "-u", "2000", "--", "input", "keyevent", "KEYCODE_WAKEUP"])
 
 def tune_kiosk_satellite_audio_preferences():
-    """Ensure Kiosk Satellite uses high-fidelity microphone capture (voice_recognition) and avoids false stops."""
+    """Ensure Kiosk Satellite uses high-fidelity microphone capture, noise gate, moderate sensitivity, and no chimes/false stops."""
+    pref_candidates = [
+        "/data/waydroid_user/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml",
+        "/var/lib/waydroid/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml",
+        os.path.expanduser("~/.local/share/waydroid/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml"),
+    ]
+
+    items = [
+        ("string", "flutter.ks.audio.mic_capture_mode", None, "voice_recognition"),
+        ("boolean", "flutter.ks.voice.stop_word", "value", "false"),
+        ("boolean", "flutter.ks.voice.wake_sound", "value", "false"),
+        ("boolean", "flutter.ks.voice.noise_gate", "value", "true"),
+        ("string", "flutter.ks.voice.wake_word_sensitivity", None, "moderately"),
+        ("long", "flutter.ks.voice_chimes.wake_volume", "value", "0"),
+        ("long", "flutter.ks.voice_chimes.done_volume", "value", "0"),
+        ("boolean", "flutter.ks.announcements.chime", "value", "false"),
+        ("boolean", "flutter.ks.voice.followup_chime", "value", "false"),
+    ]
+
+    for p in pref_candidates:
+        if os.path.exists(p):
+            try:
+                tree = ET.parse(p)
+                root = tree.getroot()
+                changed = False
+                for tag, name, attr, val in items:
+                    el = root.find(f".//*[@name='{name}']")
+                    if el is not None:
+                        if attr and el.get(attr) != val:
+                            el.set(attr, val)
+                            changed = True
+                        elif not attr and el.text != val:
+                            el.text = val
+                            changed = True
+                    else:
+                        new_el = ET.SubElement(root, tag, {"name": name})
+                        if attr:
+                            new_el.set(attr, val)
+                        else:
+                            new_el.text = val
+                        changed = True
+                if changed:
+                    tree.write(p, encoding="utf-8", xml_declaration=True)
+                    logger.info(f"Tuned Kiosk Satellite preferences in {p}")
+            except Exception as e:
+                logger.debug(f"Error updating {p}: {e}")
+
+    # Fallback via waydroid shell sed inside container
     script = (
         "PREF=/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml\n"
         "if [ -f \"$PREF\" ]; then\n"
         "  sed -i 's/<string name=\"flutter.ks.audio.mic_capture_mode\">voice_communication<\\/string>/<string name=\"flutter.ks.audio.mic_capture_mode\">voice_recognition<\\/string>/g' \"$PREF\"\n"
         "  sed -i 's/<boolean name=\"flutter.ks.voice.stop_word\" value=\"true\" \\/>/<boolean name=\"flutter.ks.voice.stop_word\" value=\"false\" \\/>/g' \"$PREF\"\n"
+        "  sed -i 's/<boolean name=\"flutter.ks.voice.wake_sound\" value=\"true\" \\/>/<boolean name=\"flutter.ks.voice.wake_sound\" value=\"false\" \\/>/g' \"$PREF\"\n"
+        "  sed -i 's/<boolean name=\"flutter.ks.voice.noise_gate\" value=\"false\" \\/>/<boolean name=\"flutter.ks.voice.noise_gate\" value=\"true\" \\/>/g' \"$PREF\"\n"
+        "  sed -i 's/<string name=\"flutter.ks.voice.wake_word_sensitivity\">very<\\/string>/<string name=\"flutter.ks.voice.wake_word_sensitivity\">moderately<\\/string>/g' \"$PREF\"\n"
         "fi\n"
     )
     run_cmd(["waydroid", "shell", "-u", "0", "--", "sh", "-c", script])
+
+
+def sync_kiosk_satellite_live_settings(options):
+    """Sync chime suppression and noise gate to Kiosk Satellite HTTP API if active."""
+    remote_port = options.get("remote_admin_port", 2324)
+    try:
+        remote_port = int(remote_port)
+    except (TypeError, ValueError):
+        remote_port = 2324
+    if not remote_port or remote_port <= 0:
+        return False
+
+    pid = _get_waydroid_pid()
+    ips = ["127.0.0.1"] + (_get_waydroid_ips(pid) if pid else [])
+    payload = json.dumps({
+        "voice.wake_sound": False,
+        "voice.noise_gate": True,
+        "voice.wake_word_sensitivity": "moderately",
+        "voice.stop_word": False,
+        "voice_chimes.wake_volume": 0,
+        "voice_chimes.done_volume": 0,
+        "announcements.chime": False,
+        "voice.followup_chime": False,
+    }).encode("utf-8")
+
+    for ip in ips:
+        try:
+            req = urllib.request.Request(
+                f"http://{ip}:{remote_port}/api/settings",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                if resp.status == 200:
+                    logger.debug("Synced live settings to Kiosk Satellite API.")
+                    return True
+        except Exception:
+            continue
+    return False
 
 def launch_app():
     tune_kiosk_satellite_audio_preferences()
@@ -975,6 +1075,7 @@ def main():
         if loop_count % 6 == 0:
             try:
                 diagnose_port_forwarding(options)
+                sync_kiosk_satellite_live_settings(options)
             except Exception as e:
                 logger.debug(f"Periodic diagnose notice: {e}")
 

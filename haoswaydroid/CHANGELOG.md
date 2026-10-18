@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.42
+- Fix: **Optimal Seeed 2-Mic analog calibration, noise gate filter, and chime suppression.**
+  - **Calibrated hardware PGA gain (PGA 85 / +42.5 dB):** Automatically configures Seeed 2-Mic (`tlv320aic3104`) analog PGA gain to 85 and ensures Line1L/Line1R mixer inputs are active on container startup and audio reconnects. Eliminates near-inaudible default capture (PGA 60 / +30 dB) and clipping distortion (PGA 105) without requiring manual ALSA mixer commands.
+  - **Ambient noise gate & moderate sensitivity:** Enables `voice.noise_gate: true` and sets `voice.wake_word_sensitivity` to `moderately` across `FlutterSharedPreferences.xml` and Kiosk Satellite HTTP API to prevent false-positive wake word triggering from background room noise.
+  - **Start and stop chime suppression:** Disables wake sounds and mutes chimes (`voice.wake_sound: false`, `voice_chimes.wake_volume: 0`, `voice_chimes.done_volume: 0`, `announcements.chime: false`) for silent, non-intrusive voice interaction.
+  - **Robust preferences tuning with XML ElementTree & REST API sync:** Automatically inspects and updates `FlutterSharedPreferences.xml` directly on host storage alongside runtime API sync, ensuring preferences persist across app restarts and updates.
+
 ## 1.0.41
 - Fix: **Preserve 100% native Home Assistant OS audio drivers and devices.**
   - **Zero manual module unloading/reloading:** Eliminates manual `module-alsa-card` reloading (`tsched=no`, custom fragment sizes), allowing PulseAudio to run with Home Assistant OS's native `module-udev-detect` drivers. Restores native jitter-free audio and crystal-clear voice playback on Raspberry Pi 5 without ALSA timing conflicts.
