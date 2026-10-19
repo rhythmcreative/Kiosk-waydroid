@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.43
+- Fix: **Reliable in-place APK updates preserving user settings without fallback warnings.**
+  - **Dynamic Android staging discovery:** Automatically detects active Waydroid data and staging locations (`/root/.local/share/waydroid/data/local/tmp`, `/data/local/tmp`, and `/sdcard`), replacing legacy hardcoded `/var/lib/waydroid/data/media/0` path. Eliminates `[Errno 2] No such file or directory` errors.
+  - **Seamless `pm install -r` upgrades:** Ensures staged APK files have read permissions (`0666`) so Android's package manager updates Kiosk Satellite in-place without falling back to direct install or risking setting resets.
+  - **Accurate permission logs:** Clarified lifecycle logs during app installation and updates.
+
 ## 1.0.42
 - Fix: **Optimal Seeed 2-Mic analog calibration, noise gate filter, and chime suppression.**
   - **Calibrated hardware PGA gain (PGA 85 / +42.5 dB):** Automatically configures Seeed 2-Mic (`tlv320aic3104`) analog PGA gain to 85 and ensures Line1L/Line1R mixer inputs are active on container startup and audio reconnects. Eliminates near-inaudible default capture (PGA 60 / +30 dB) and clipping distortion (PGA 105) without requiring manual ALSA mixer commands.

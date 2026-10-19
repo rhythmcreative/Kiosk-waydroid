@@ -216,30 +216,49 @@ def ensure_kiosk_satellite_installed(options):
         need_install = False
 
     if need_install and os.path.exists(apk_path):
-        # Copy APK to Android's shared storage so pm can access it
-        # /var/lib/waydroid/data/media/0/ maps to /sdcard/ inside Android
-        sdcard_apk_host = "/var/lib/waydroid/data/media/0/kiosk-satellite-update.apk"
-        sdcard_apk_android = "/sdcard/kiosk-satellite-update.apk"
-        try:
-            import shutil
-            shutil.copy2(apk_path, sdcard_apk_host)
-        except Exception as e:
-            logger.warning(f"Could not copy APK to sdcard path: {e} — falling back to direct install")
-            sdcard_apk_host = None
+        # Staging candidates:
+        # Waydroid user data is located under /root/.local/share/waydroid/data/ (or ~/.local/share/waydroid/data)
+        # Inside Android, /data/local/tmp is the standard directory for pm install and /sdcard (media/0) is also valid
+        staging_candidates = [
+            ("/root/.local/share/waydroid/data/local/tmp", "/data/local/tmp"),
+            (os.path.expanduser("~/.local/share/waydroid/data/local/tmp"), "/data/local/tmp"),
+            ("/root/.local/share/waydroid/data/media/0", "/sdcard"),
+            (os.path.expanduser("~/.local/share/waydroid/data/media/0"), "/sdcard"),
+            ("/data/waydroid_user/data/local/tmp", "/data/local/tmp"),
+            ("/data/waydroid_user/data/media/0", "/sdcard"),
+            ("/var/lib/waydroid/data/local/tmp", "/data/local/tmp"),
+            ("/var/lib/waydroid/data/media/0", "/sdcard"),
+        ]
 
-        if sdcard_apk_host and os.path.exists(sdcard_apk_host):
+        staging_apk_host = None
+        staging_apk_android = None
+        for host_dir, android_dir in staging_candidates:
+            if os.path.isdir(host_dir):
+                target_file = os.path.join(host_dir, "kiosk-satellite-update.apk")
+                try:
+                    import shutil
+                    shutil.copy2(apk_path, target_file)
+                    os.chmod(target_file, 0o666)
+                    staging_apk_host = target_file
+                    staging_apk_android = f"{android_dir}/kiosk-satellite-update.apk"
+                    break
+                except Exception as e:
+                    logger.debug(f"Could not stage APK at {target_file}: {e}")
+                    continue
+
+        if staging_apk_host and os.path.exists(staging_apk_host):
             # Use pm install -r: replaces the app but KEEPS all user data and settings
             if already_installed:
-                logger.info("Updating APK with pm install -r (user data will be preserved)...")
+                logger.info("Updating APK with pm install -r (user data and settings preserved)...")
                 rc, out, err = run_cmd(["waydroid", "shell", "-u", "0", "--",
-                                        "pm", "install", "-r", sdcard_apk_android])
+                                        "pm", "install", "-r", "-d", staging_apk_android])
             else:
                 logger.info("Installing APK for the first time via pm install...")
                 rc, out, err = run_cmd(["waydroid", "shell", "-u", "0", "--",
-                                        "pm", "install", sdcard_apk_android])
+                                        "pm", "install", staging_apk_android])
             # Clean up temp file
             try:
-                os.remove(sdcard_apk_host)
+                os.remove(staging_apk_host)
             except Exception:
                 pass
         else:
@@ -889,9 +908,10 @@ def provision_android():
 def tune_kiosk_satellite_audio_preferences():
     """Ensure Kiosk Satellite uses high-fidelity microphone capture, noise gate, moderate sensitivity, and no chimes/false stops."""
     pref_candidates = [
+        "/root/.local/share/waydroid/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml",
+        os.path.expanduser("~/.local/share/waydroid/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml"),
         "/data/waydroid_user/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml",
         "/var/lib/waydroid/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml",
-        os.path.expanduser("~/.local/share/waydroid/data/data/me.jxl.kiosk_satellite/shared_prefs/FlutterSharedPreferences.xml"),
     ]
 
     items = [
@@ -1023,7 +1043,7 @@ def main():
     # Grant permissions only on fresh install/update — not on every boot
     # (reinstalling resets permissions, but if we didn't reinstall we don't need to re-grant)
     if just_installed:
-        logger.info("Fresh install detected — granting permissions.")
+        logger.info("App installation or update detected — ensuring Android permissions...")
         grant_permissions()
     else:
         logger.info("App already installed — skipping permission grant to preserve user settings.")
